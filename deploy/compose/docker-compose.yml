@@ -1,0 +1,86 @@
+services:
+  storage-init:
+    image: alpine:3.20
+    command: ["sh", "-c", "rm -rf /data/* && mkdir -p /data/artifacts"]
+    volumes:
+      - cluster_data:/data
+
+  worker-alpha:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile
+    command: ["node", "dist/worker/main.js"]
+    environment:
+      SQLITE_PATH: /data/cluster-state.sqlite
+      ARTIFACT_DIR: /data/artifacts
+      AGBOSS_NODE_ROLE: worker
+      WORKER_READY_FILE: /tmp/worker-ready
+      AGBOSS_FAST_SWEEP: ${AGBOSS_FAST_SWEEP:-true}
+      AGBOSS_REAL_CLOCK: ${AGBOSS_REAL_CLOCK:-false}
+      AGBOSS_LIVE_DEMO: ${AGBOSS_LIVE_DEMO:-false}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-offline-test-openrouter-api-key}
+      PII_PSEUDONYM_KEY: distributed-agent-recovery-pseudonym-key-32b!
+    volumes:
+      - cluster_data:/data
+    depends_on:
+      storage-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/worker-ready"]
+      interval: 1s
+      timeout: 2s
+      retries: 20
+      start_period: 1s
+
+  worker-beta:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile
+    command: ["node", "dist/worker/main.js"]
+    environment:
+      SQLITE_PATH: /data/cluster-state.sqlite
+      ARTIFACT_DIR: /data/artifacts
+      AGBOSS_NODE_ROLE: worker
+      WORKER_READY_FILE: /tmp/worker-ready
+      AGBOSS_FAST_SWEEP: ${AGBOSS_FAST_SWEEP:-true}
+      AGBOSS_REAL_CLOCK: ${AGBOSS_REAL_CLOCK:-false}
+      AGBOSS_LIVE_DEMO: ${AGBOSS_LIVE_DEMO:-false}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-offline-test-openrouter-api-key}
+      PII_PSEUDONYM_KEY: distributed-agent-recovery-pseudonym-key-32b!
+    volumes:
+      - cluster_data:/data
+    depends_on:
+      worker-alpha:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/worker-ready"]
+      interval: 1s
+      timeout: 2s
+      retries: 20
+      start_period: 1s
+
+  coordinator:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile
+    command: ["node", "dist/src/demo.js"]
+    environment:
+      SQLITE_PATH: /data/cluster-state.sqlite
+      ARTIFACT_DIR: /data/artifacts
+      AGBOSS_NODE_ROLE: coordinator
+      AGBOSS_EXTERNAL_WORKERS: "true"
+      AGBOSS_FAST_SWEEP: ${AGBOSS_FAST_SWEEP:-true}
+      AGBOSS_REAL_CLOCK: ${AGBOSS_REAL_CLOCK:-false}
+      AGBOSS_LIVE_DEMO: ${AGBOSS_LIVE_DEMO:-false}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-offline-test-openrouter-api-key}
+      PII_PSEUDONYM_KEY: distributed-agent-recovery-pseudonym-key-32b!
+    volumes:
+      - cluster_data:/data
+    depends_on:
+      worker-alpha:
+        condition: service_healthy
+      worker-beta:
+        condition: service_healthy
+
+volumes:
+  cluster_data:

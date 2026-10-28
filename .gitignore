@@ -1,0 +1,16 @@
+node_modules/
+dist/
+coverage/
+.data/
+.agboss/
+**/.agboss/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+.env
+.env.*
+!**/.env.example
+.DS_Store
+*.log
+.idea/
+.vscode/

@@ -1,0 +1,94 @@
+# Optional single-node local Kubernetes (kind / k3d) manifest
+# Shares a hostPath volume across 2 worker pods and 1 coordinator job on a single node.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agboss-recovery-showcase
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agboss-worker
+  namespace: agboss-recovery-showcase
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: agboss-worker
+  template:
+    metadata:
+      labels:
+        app: agboss-worker
+    spec:
+      containers:
+        - name: worker
+          image: agboss/distributed-agent-recovery:latest
+          imagePullPolicy: IfNotPresent
+          command: ["node", "dist/worker/main.js"]
+          env:
+            - name: SQLITE_PATH
+              value: /data/cluster-state.sqlite
+            - name: ARTIFACT_DIR
+              value: /data/artifacts
+            - name: AGBOSS_NODE_ROLE
+              value: worker
+            - name: WORKER_READY_FILE
+              value: /tmp/worker-ready
+            - name: AGBOSS_FAST_SWEEP
+              value: "true"
+            - name: OPENROUTER_API_KEY
+              value: offline-test-openrouter-api-key
+            - name: PII_PSEUDONYM_KEY
+              value: distributed-agent-recovery-pseudonym-key-32b!
+          readinessProbe:
+            exec:
+              command: ["test", "-f", "/tmp/worker-ready"]
+            initialDelaySeconds: 2
+            periodSeconds: 2
+          volumeMounts:
+            - name: shared-sqlite-data
+              mountPath: /data
+      volumes:
+        - name: shared-sqlite-data
+          hostPath:
+            path: /tmp/agboss-recovery-showcase-data
+            type: DirectoryOrCreate
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: agboss-release-coordinator
+  namespace: agboss-recovery-showcase
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: coordinator
+          image: agboss/distributed-agent-recovery:latest
+          imagePullPolicy: IfNotPresent
+          command: ["node", "dist/src/demo.js"]
+          env:
+            - name: SQLITE_PATH
+              value: /data/cluster-state.sqlite
+            - name: ARTIFACT_DIR
+              value: /data/artifacts
+            - name: AGBOSS_NODE_ROLE
+              value: coordinator
+            - name: AGBOSS_EXTERNAL_WORKERS
+              value: "true"
+            - name: AGBOSS_FAST_SWEEP
+              value: "true"
+            - name: OPENROUTER_API_KEY
+              value: offline-test-openrouter-api-key
+            - name: PII_PSEUDONYM_KEY
+              value: distributed-agent-recovery-pseudonym-key-32b!
+          volumeMounts:
+            - name: shared-sqlite-data
+              mountPath: /data
+      volumes:
+        - name: shared-sqlite-data
+          hostPath:
+            path: /tmp/agboss-recovery-showcase-data
+            type: DirectoryOrCreate

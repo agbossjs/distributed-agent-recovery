@@ -1,0 +1,43 @@
+{
+  "name": "distributed-agent-recovery",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Distributed AI workflow recovery, saga compensation, and zombie worker lease fencing with AGBoss",
+  "license": "Apache-2.0",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/agbossjs/distributed-agent-recovery.git"
+  },
+  "agboss": {
+    "application": "src/distributed-agent-recovery.application.ts",
+    "skills": false
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && node -e 'import(\"node:fs\").then(f => f.cpSync(\"src\", \"dist/src\", { recursive: true, filter: p => !p.endsWith(\".ts\") }))'",
+    "check": "agboss check && tsc --noEmit && eslint .",
+    "describe": "agboss describe",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "demo": "tsx src/demo.ts",
+    "demo:live": "tsx src/demo.ts --live",
+    "demo:cluster": "tsx src/demo.ts --cluster",
+    "demo:compose": "docker compose -f deploy/compose/docker-compose.yml up --build --abort-on-container-exit --exit-code-from coordinator",
+    "verify": "tsx src/demo.ts --verify-only"
+  },
+  "dependencies": {
+    "@agboss/core": "0.1.0",
+    "drizzle-orm": "^0.45.4"
+  },
+  "devDependencies": {
+    "@agboss/cli": "0.1.0",
+    "@eslint/js": "^9.22.0",
+    "@stylistic/eslint-plugin": "^4.2.0",
+    "@types/node": "^22.13.10",
+    "eslint": "^9.22.0",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2",
+    "typescript-eslint": "^8.26.1",
+    "vitest": "^3.0.8"
+  }
+}

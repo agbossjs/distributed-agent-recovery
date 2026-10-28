@@ -1,0 +1,8 @@
+node_modules
+dist
+.data
+.agboss
+.git
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
