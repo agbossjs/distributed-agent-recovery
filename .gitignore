@@ -12,5 +12,6 @@ coverage/
 !**/.env.example
 .DS_Store
 *.log
+!docs/evidence/*.log
 .idea/
 .vscode/

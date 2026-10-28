@@ -1,0 +1,12 @@
+04:12:52 INFO  Started distributed-agent-recovery-application 1.0.0 — environment dev, host darwin-arm64-host, process 2768
+04:12:52 INFO  Worst case of one release-coordinator-workflow-start call: 9 workflow executions, 5 at the same time, 1 agent and router steps
+04:12:52 INFO  Worst case of one module-worker-workflow-start call: 1 workflow execution, 1 at the same time, 0 agent and router steps
+[worker:2772] 04:12:53 INFO  Started distributed-agent-recovery-application 1.0.0 — environment dev, host darwin-arm64-host, process 2772
+[worker:2772] 04:12:53 INFO  Worst case of one release-coordinator-workflow-start call: 9 workflow executions, 5 at the same time, 1 agent and router steps
+04:12:53 INFO  Worst case of one module-worker-workflow-start call: 1 workflow execution, 1 at the same time, 0 agent and router steps
+[worker:2772] WORKER_READY status=healthy pid=2772
+[worker:2783] 04:12:53 INFO  Started distributed-agent-recovery-application 1.0.0 — environment dev, host darwin-arm64-host, process 2783
+[worker:2783] 04:12:53 INFO  Worst case of one release-coordinator-workflow-start call: 9 workflow executions, 5 at the same time, 1 agent and router steps
+04:12:53 INFO  Worst case of one module-worker-workflow-start call: 1 workflow execution, 1 at the same time, 0 agent and router steps
+[worker:2783] WORKER_READY status=healthy pid=2783
+[worker:2772] 04:15:23 WARN  execution f9907abf-19fd-498b-8397-49152e25345f is recovered: it continues from its last checkpoint [execution.recovered] executionId=f9907abf-19fd-498b-8397-49152e25345f tenantId=default
