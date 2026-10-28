@@ -1,4 +1,5 @@
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { Clock, HealthStatus, createApp } from "@agboss/core";
 import { FastClusterClock } from "../scenarios/fast-cluster-clock.js";
 import {
@@ -15,6 +16,13 @@ const openRouterKey = isLive
 const useFastSweep =
   process.env["AGBOSS_FAST_SWEEP"] === "true" &&
   process.env["AGBOSS_REAL_CLOCK"] !== "true";
+
+if (process.env["SQLITE_PATH"] !== undefined) {
+  mkdirSync(dirname(process.env["SQLITE_PATH"]), { recursive: true });
+}
+if (process.env["ARTIFACT_DIR"] !== undefined) {
+  mkdirSync(process.env["ARTIFACT_DIR"], { recursive: true });
+}
 
 const app = await createApp(DistributedAgentRecoveryApplication, {
   processEnv: {

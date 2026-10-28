@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="660" viewBox="0 0 1120 660">
+  <rect width="1120" height="660" rx="14" fill="#0d1117" stroke="#30363d" stroke-width="2"/>
+  <rect x="1" y="1" width="1118" height="44" rx="13" fill="#161b22"/>
+  <rect x="1" y="32" width="1118" height="14" fill="#161b22"/>
+  <line x1="0" y1="45" x2="1120" y2="45" stroke="#30363d" stroke-width="1"/>
+  <circle cx="24" cy="23" r="6.5" fill="#ff5f56"/>
+  <circle cx="46" cy="23" r="6.5" fill="#ffbd2e"/>
+  <circle cx="68" cy="23" r="6.5" fill="#27c93f"/>
+  <text x="560" y="28" text-anchor="middle" fill="#8b949e" font-family="Menlo, Monaco, Consolas, monospace" font-size="13">agbossjs/distributed-agent-recovery — Ghost in the Machine: The Zombie AI Worker (45.0s)</text>
+  <text x="28" y="86" fill="#8b949e" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">$ OPENROUTER_API_KEY=sk-or-... node dist/src/demo.js --cluster --live --real-clock</text>
+<text x="28" y="108" fill="#79c0ff" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">[coord:2768]  INFO  Started distributed-agent-recovery-application 1.0.0 (real-30s-clock)</text>
+<text x="28" y="130" fill="#56d364" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">[worker:2772] WORKER_READY status=healthy instance=2cfa9c79-b0c0... pid=2772</text>
+<text x="28" y="152" fill="#56d364" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">[worker:2783] WORKER_READY status=healthy instance=bfa0c7de-86c6... pid=2783</text>
+<text x="28" y="174" fill="#d2a8ff" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">── ATTEMPT 1 (exec 2be7d7f8-c575-4846-b261-c1ef4aea5e93) ─────────────────────────────</text>
+<text x="28" y="196" fill="#e6edf3" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">[coord:2768]  Enqueue 3 child workflows (ChildPlacement.AnyInstance) -&gt; SQLite WAL queue</text>
+<text x="28" y="218" fill="#7ee787" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">[worker:2772] STAGE_ARTIFACT auth-service        (epoch=1, key=c333022a...:1) -&gt; .artifact.json</text>
+<text x="28" y="240" fill="#7ee787" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">[worker:2783] STAGE_ARTIFACT payment-engine      (epoch=1, key=0415cf66...:1) -&gt; .artifact.json</text>
+<text x="28" y="262" fill="#7ee787" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">[worker:2783] STAGE_ARTIFACT telemetry-collector (epoch=1, key=ce4616ea...:1) -&gt; .artifact.json</text>
+<text x="28" y="284" fill="#ff7b72" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">[coord:2768]  ERROR VerifyReleaseSmokeGateAction -&gt; ReleaseGateFailedError (missing --abi-compat=v2)</text>
+<text x="28" y="306" fill="#ffa657" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">[coord:2768]  SAGA  CompensateReleaseCandidateAction -&gt; deleted 3 staged files, status=COMPENSATED</text>
+<text x="28" y="328" fill="#a5d6ff" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">[agent:gpt-4o-mini] ToolCall InspectFailedAttemptTool(rel-2026.10.0) -&gt; allCompensated=true</text>
+<text x="28" y="350" fill="#a5d6ff" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">[agent:gpt-4o-mini] RecoveryPlanDto: flags='--opt-level=3 --deterministic --abi-compat=v2' ($0.000363)</text>
+<text x="28" y="372" fill="#d2a8ff" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">── ATTEMPT 2 (exec bbd3d722-6ab2-4493-94c1-177e49035dd9) ─────────────────────────────</text>
+<text x="28" y="394" fill="#7ee787" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">[worker:2772] STAGE_ARTIFACT auth-service        (epoch=1) -&gt; STAGED</text>
+<text x="28" y="416" fill="#7ee787" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">[worker:2783] STAGE_ARTIFACT telemetry-collector (epoch=1) -&gt; STAGED</text>
+<text x="28" y="438" fill="#e6edf3" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">[worker:2783] Step 1 checkpoint saved for payment-engine (childId=f9907abf-19fd..., epoch=1)</text>
+<text x="28" y="460" fill="#ff7b72" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">[worker:2783] *** POSIX SIGSTOP FREEZE (pid=2783 frozen mid-Step 2; 30s lease TTL ticking...) ***</text>
+<text x="28" y="482" fill="#ffa657" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">[worker:2772] WARN  execution f9907abf-19fd-498b-8397-49152e25345f is recovered [execution.recovered]</text>
+<text x="28" y="504" fill="#56d364" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">[worker:2772] Reclaimed SAME childId f9907abf-19fd... under leaseEpoch=2 from Step 1 checkpoint!</text>
+<text x="28" y="526" fill="#56d364" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">[worker:2772] STAGE_ARTIFACT payment-engine COMMITTED (epoch=2, key=f9907abf...:1)</text>
+<text x="28" y="548" fill="#ff7b72" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">[worker:2783] *** POSIX SIGCONT WAKEUP: Zombie Worker A resumes with stale leaseEpoch=1 ***</text>
+<text x="28" y="570" fill="#ffa657" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">[fence:L1-DB] ZOMBIE_WRITE_REJECTED: stale epoch 1 &lt; active epoch 2 (StaleLeaseFenceError)</text>
+<text x="28" y="592" fill="#ffa657" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">[fence:L2-CP] LeasedCheckpointSaver.putWrites -&gt; ExecutionLeaseLostError [execution.lease-lost]</text>
+<text x="28" y="614" fill="#56d364" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">[coord:2768]  PROMOTE_RELEASE -&gt; .data/demo/artifacts/releases/rel-2026.10.0/release-manifest.json</text>
+<text x="28" y="636" fill="#79c0ff" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">── 8/8 INVARIANTS VERIFIED (allVerified=true) ─────────────────────────────────────────</text>
+<text x="28" y="658" fill="#56d364" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">✓ INV-1..4  3 modules PROMOTED · 0 Attempt-1 files active · LIFO Saga COMPENSATED</text>
+<text x="28" y="680" fill="#56d364" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">✓ INV-5..6  6 unique step.idempotencyKey commits · 2 OS worker PIDs [2772, 2783] balanced</text>
+<text x="28" y="702" fill="#56d364" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">✓ INV-7     Zombie fenced (L1 DB + L2 CheckpointSaver · linear checkpoints=6, fork=false)</text>
+<text x="28" y="724" fill="#56d364" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">✓ INV-8     Same childId f9907abf-19fd... recovered (AGBoss execution_leases epoch 1 -&gt; 2)</text>
+</svg>

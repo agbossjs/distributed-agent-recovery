@@ -65,7 +65,11 @@ export class StageModuleArtifactAction
       idempotencyKey,
     });
 
-    if (candidate.simulateWorkerStall && alreadyStalled) {
+    if (
+      candidate.simulateWorkerStall &&
+      alreadyStalled &&
+      process.env["AGBOSS_CRASH_WORKER_ON_STALL"] !== "true"
+    ) {
       await this.fencing.resumeFrozenStalledWorker(executionId);
       await this.waitUntil(() => this.fencing.hasZombieFullyFenced(executionId), 600);
     }
@@ -97,6 +101,9 @@ export class StageModuleArtifactAction
       idempotencyKey,
       skipSyntheticLeaseExpiry: osFreeze,
     });
+    if (process.env["AGBOSS_CRASH_WORKER_ON_STALL"] === "true") {
+      process.exit(137);
+    }
     if (osFreeze) {
       process.kill(process.pid, "SIGSTOP");
       await this.clock.sleep(seconds(0.05));

@@ -17,6 +17,7 @@ services:
       WORKER_READY_FILE: /tmp/worker-ready
       AGBOSS_FAST_SWEEP: ${AGBOSS_FAST_SWEEP:-true}
       AGBOSS_REAL_CLOCK: ${AGBOSS_REAL_CLOCK:-false}
+      AGBOSS_CRASH_WORKER_ON_STALL: ${AGBOSS_CRASH_WORKER_ON_STALL:-false}
       AGBOSS_LIVE_DEMO: ${AGBOSS_LIVE_DEMO:-false}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-offline-test-openrouter-api-key}
       PII_PSEUDONYM_KEY: distributed-agent-recovery-pseudonym-key-32b!
@@ -44,6 +45,7 @@ services:
       WORKER_READY_FILE: /tmp/worker-ready
       AGBOSS_FAST_SWEEP: ${AGBOSS_FAST_SWEEP:-true}
       AGBOSS_REAL_CLOCK: ${AGBOSS_REAL_CLOCK:-false}
+      AGBOSS_CRASH_WORKER_ON_STALL: ${AGBOSS_CRASH_WORKER_ON_STALL:-false}
       AGBOSS_LIVE_DEMO: ${AGBOSS_LIVE_DEMO:-false}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-offline-test-openrouter-api-key}
       PII_PSEUDONYM_KEY: distributed-agent-recovery-pseudonym-key-32b!
@@ -71,6 +73,7 @@ services:
       AGBOSS_EXTERNAL_WORKERS: "true"
       AGBOSS_FAST_SWEEP: ${AGBOSS_FAST_SWEEP:-true}
       AGBOSS_REAL_CLOCK: ${AGBOSS_REAL_CLOCK:-false}
+      AGBOSS_CRASH_WORKER_ON_STALL: ${AGBOSS_CRASH_WORKER_ON_STALL:-false}
       AGBOSS_LIVE_DEMO: ${AGBOSS_LIVE_DEMO:-false}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-offline-test-openrouter-api-key}
       PII_PSEUDONYM_KEY: distributed-agent-recovery-pseudonym-key-32b!

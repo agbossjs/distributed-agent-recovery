@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -15,7 +16,7 @@ concurrency:
 
 jobs:
   verify:
-    name: Static Check, Build, Tests & Multi-Process Cluster Gate (Node 24)
+    name: Static Check, Tests & Real-Clock POSIX SIGSTOP Multi-Process Gate (Node 24)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -37,10 +38,108 @@ jobs:
       - name: Compile production artifacts
         run: npm run build
 
-      - name: Run unit & workflow tests
+      - name: Run unit & workflow tests (including independent AGBoss lease/checkpoint table assertions)
         run: npm test
 
-      - name: Run compiled multi-process cluster showcase & 8-invariant verifier
+      - name: Run fast multi-process cluster showcase & 8-invariant verifier
         run: |
           node dist/src/demo.js --cluster
           node dist/src/demo.js --verify-only
+
+      - name: Run real-clock (30s lease TTL + POSIX SIGSTOP/SIGCONT) multi-process zombie recovery gate
+        run: |
+          AGBOSS_LOG_WORKERS=true node dist/src/demo.js --cluster --real-clock > /tmp/real-clock-report.json
+          node dist/src/demo.js --verify-only > /tmp/real-clock-verify.json
+          node -e '
+            const fs = require("node:fs");
+            const r = JSON.parse(fs.readFileSync("/tmp/real-clock-report.json", "utf8"));
+            if (
+              r.clockMode !== "real-30s-clock" ||
+              r.faultMode !== "os-sigstop-natural-lease-expiry" ||
+              r.workerTopology !== "multi-process" ||
+              !r.invariants.allVerified
+            ) {
+              throw new Error("Real-clock verification failed: " + JSON.stringify(r.invariants, null, 2));
+            }
+            console.log("Verified real-clock POSIX SIGSTOP takeover across worker PIDs:", r.workerPids);
+          '
+
+      - name: Upload real-clock multi-process zombie recovery evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-clock-zombie-recovery-evidence
+          path: |
+            /tmp/real-clock-report.json
+            /tmp/real-clock-verify.json
+
+  docker-compose:
+    name: Docker Compose 4-Container Cluster & Worker-Crash Resilience Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run 4-container Docker Compose cluster & verify all 8 invariants
+        run: |
+          docker compose -f deploy/compose/docker-compose.yml up --build --abort-on-container-exit --exit-code-from coordinator
+          docker compose -f deploy/compose/docker-compose.yml run --rm --no-deps coordinator node dist/src/demo.js --verify-only > /tmp/compose-verify.json
+          node -e '
+            const fs = require("node:fs");
+            const v = JSON.parse(fs.readFileSync("/tmp/compose-verify.json", "utf8"));
+            if (!v.allVerified || v.checks.length !== 8) {
+              throw new Error("Docker Compose invariant verification failed: " + JSON.stringify(v, null, 2));
+            }
+            console.log("Docker Compose 8/8 invariants VERIFIED");
+          '
+          docker compose -f deploy/compose/docker-compose.yml down -v
+
+      - name: Verify hard worker container death (exit 137) mid-step recovers on surviving worker without hang or corruption
+        run: |
+          AGBOSS_CRASH_WORKER_ON_STALL=true docker compose -f deploy/compose/docker-compose.yml up -d --wait worker-alpha worker-beta
+          AGBOSS_CRASH_WORKER_ON_STALL=true docker compose -f deploy/compose/docker-compose.yml run --rm --no-deps coordinator node dist/src/demo.js
+          AGBOSS_CRASH_WORKER_ON_STALL=true docker compose -f deploy/compose/docker-compose.yml run --rm --no-deps coordinator node dist/src/demo.js --verify-only > /tmp/compose-crash-verify.json
+          docker compose -f deploy/compose/docker-compose.yml ps -a
+          node -e '
+            const fs = require("node:fs");
+            const v = JSON.parse(fs.readFileSync("/tmp/compose-crash-verify.json", "utf8"));
+            if (!v.allVerified) {
+              throw new Error("Worker-crash failover verification failed: " + JSON.stringify(v, null, 2));
+            }
+            console.log("Docker Compose hard worker-crash failover VERIFIED");
+          '
+          docker compose -f deploy/compose/docker-compose.yml down -v
+
+  kubernetes-kind:
+    name: Single-Node Kubernetes (kind) Manifest & 8-Invariant Job Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build container image for local Kubernetes cluster
+        run: docker build -t agboss/distributed-agent-recovery:latest -f deploy/compose/Dockerfile .
+
+      - name: Create single-node kind Kubernetes cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: agboss-kind
+
+      - name: Load showcase image into kind node
+        run: kind load docker-image agboss/distributed-agent-recovery:latest --name agboss-kind
+
+      - name: Deploy worker Deployment (replicas=2) & coordinator Job and verify all 8 invariants
+        run: |
+          kubectl apply -f deploy/kubernetes/local-cluster.yaml
+          kubectl rollout status deployment/agboss-worker -n agboss-recovery-showcase --timeout=90s
+          kubectl wait --for=condition=complete job/agboss-release-coordinator -n agboss-recovery-showcase --timeout=120s
+          kubectl logs job/agboss-release-coordinator -n agboss-recovery-showcase > /tmp/k8s-coordinator.json
+          node -e '
+            const fs = require("node:fs");
+            const r = JSON.parse(fs.readFileSync("/tmp/k8s-coordinator.json", "utf8"));
+            if (!r.invariants || !r.invariants.allVerified || r.invariants.checks.length !== 8) {
+              throw new Error("Kubernetes kind invariant check failed: " + JSON.stringify(r, null, 2));
+            }
+            console.log("Kubernetes (kind) 2-pod worker Deployment + coordinator Job 8/8 invariants VERIFIED");
+          '

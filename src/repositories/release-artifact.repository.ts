@@ -1,16 +1,13 @@
 import { Injectable } from "@agboss/core";
 import { and, asc, count, desc, eq, gte, inArray } from "drizzle-orm";
-import { executionLeasesTable, sqliteMasterTable } from "../schemas/agboss-cluster.schema.js";
 import {
-  fencingTokensTable,
-  ledgerEventsTable,
   releaseArtifactsTable,
-  releaseCandidateLocksTable,
   type ArtifactStatus,
   type LedgerArtifactRow,
   type LedgerSnapshot,
   type NewLedgerArtifactRow,
 } from "../schemas/release-ledger.schema.js";
+import { ClusterSnapshotRepository } from "./cluster-snapshot.repository.js";
 import {
   LedgerDatabaseRepository,
   type LedgerDrizzleExecutor,
@@ -147,51 +144,11 @@ export class ReleaseArtifactRepository {
       .where(eq(releaseArtifactsTable.artifactId, params.artifactId));
   }
 
-  static async readSnapshotFromFile(params: {
+  static readSnapshotFromFile(params: {
     readonly sqlitePath: string;
     readonly artifactDir: string;
     readonly releaseId?: string;
   }): Promise<LedgerSnapshot> {
-    return LedgerDatabaseRepository.withSqliteFile(params.sqlitePath, async (db) => {
-      const leaseTableRows = await db
-        .select({ name: sqliteMasterTable.name })
-        .from(sqliteMasterTable)
-        .where(
-          and(eq(sqliteMasterTable.type, "table"), eq(sqliteMasterTable.name, "execution_leases")),
-        )
-        .limit(1);
-      const id = params.releaseId;
-      return {
-        sqlitePath: params.sqlitePath,
-        artifactDir: params.artifactDir,
-        artifacts: await db
-          .select()
-          .from(releaseArtifactsTable)
-          .where(id === undefined ? undefined : eq(releaseArtifactsTable.releaseId, id))
-          .orderBy(asc(releaseArtifactsTable.attemptNumber), asc(releaseArtifactsTable.moduleName)),
-        candidateLocks: await db
-          .select()
-          .from(releaseCandidateLocksTable)
-          .where(id === undefined ? undefined : eq(releaseCandidateLocksTable.releaseId, id))
-          .orderBy(asc(releaseCandidateLocksTable.attemptNumber)),
-        fencingTokens: await db
-          .select()
-          .from(fencingTokensTable)
-          .where(id === undefined ? undefined : eq(fencingTokensTable.releaseId, id))
-          .orderBy(asc(fencingTokensTable.attemptNumber), asc(fencingTokensTable.logicalTaskId)),
-        events: await db
-          .select()
-          .from(ledgerEventsTable)
-          .where(id === undefined ? undefined : eq(ledgerEventsTable.releaseId, id))
-          .orderBy(asc(ledgerEventsTable.eventId)),
-        executionLeases:
-          leaseTableRows.length > 0
-            ? await db
-                .select()
-                .from(executionLeasesTable)
-                .orderBy(asc(executionLeasesTable.rootExecutionId))
-            : [],
-      };
-    });
+    return ClusterSnapshotRepository.readFromFile(params);
   }
 }

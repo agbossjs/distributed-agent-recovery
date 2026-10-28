@@ -1,0 +1,448 @@
+{
+  "showcase": "agbossjs/distributed-agent-recovery",
+  "title": "Ghost in the Machine: The Zombie AI Worker",
+  "tagline": "The worker didn't survive. The workflow did.",
+  "mode": "live-openrouter",
+  "clockMode": "real-30s-clock",
+  "faultMode": "os-sigstop-natural-lease-expiry",
+  "workerTopology": "multi-process",
+  "workerPids": [
+    2772,
+    2783
+  ],
+  "health": {
+    "livenessStatus": "healthy",
+    "readinessStatus": "healthy",
+    "healthCheckComponents": [
+      "distributed-agent-recovery-application",
+      "recovery-loop",
+      "step-slots",
+      "SqliteExecutionRecordRepository",
+      "SqliteCostLedgerRepository",
+      "SqlitePausedExecutionRepository",
+      "FencedSqliteExecutionLeaseRepository",
+      "SqliteExecutionTreeRepository",
+      "SqliteRateLimitRepository",
+      "InMemoryMeshRequestRepository",
+      "SqliteExecutionHistoryRepository",
+      "SqliteCheckpointSaver",
+      "openrouter-model-provider",
+      "release-cluster-health-check"
+    ]
+  },
+  "attempt1": {
+    "executionId": "2be7d7f8-c575-4846-b261-c1ef4aea5e93",
+    "status": "finished",
+    "finish": "ReleaseRecoveryPlannedWorkflowFinish",
+    "toolCallsCount": 1,
+    "compensationsCount": 1,
+    "llmSpend": {
+      "calls": 2,
+      "inputTokens": 1705,
+      "outputTokens": 178,
+      "totalUsd": 0.00036255,
+      "servedBy": [
+        "OpenAI"
+      ]
+    },
+    "recoveryPlan": {
+      "releaseId": "rel-2026.10.0",
+      "version": "2.4.0",
+      "nextAttemptNumber": 2,
+      "rootCauseAnalysis": "ABI compatibility smoke check failed for rel-2026.10.0 (attempt 1) with buildFlags=\"--opt-level=3 --deterministic\": payment-engine requires --abi-compat=v2. Saga compensation successfully cleaned up all staged artifacts from the previous attempt.",
+      "correctedBuildFlags": "--opt-level=3 --deterministic --abi-compat=v2",
+      "enableLeaseTakeoverDrill": true
+    }
+  },
+  "attempt2": {
+    "executionId": "bbd3d722-6ab2-4493-94c1-177e49035dd9",
+    "status": "finished",
+    "finish": "ReleaseCoordinatorWorkflowFinish",
+    "releaseSummary": {
+      "releaseId": "rel-2026.10.0",
+      "version": "2.4.0",
+      "attemptNumber": 2,
+      "status": "PROMOTED",
+      "promotedModuleCount": 3,
+      "participatingInstances": "2cfa9c79-b0c0-43d4-b1e5-3124f9f77098,bfa0c7de-86c6-4cc6-9536-5b55124bb544",
+      "manifestPath": "./.data/demo/artifacts/releases/rel-2026.10.0/release-manifest.json"
+    }
+  },
+  "invariants": {
+    "releaseId": "rel-2026.10.0",
+    "sqlitePath": "./.data/demo/cluster-state.sqlite",
+    "artifactDir": "./.data/demo/artifacts",
+    "allVerified": true,
+    "checks": [
+      {
+        "id": "INV-1-ALL-MODULES-COMPLETED",
+        "number": 1,
+        "description": "Every expected module was completed",
+        "status": "VERIFIED",
+        "evidence": {
+          "expected": [
+            "auth-service",
+            "payment-engine",
+            "telemetry-collector"
+          ],
+          "promoted": [
+            "auth-service",
+            "payment-engine",
+            "telemetry-collector"
+          ]
+        }
+      },
+      {
+        "id": "INV-2-FINAL-ARTIFACTS-EXIST",
+        "number": 2,
+        "description": "Required final artifacts exist",
+        "status": "VERIFIED",
+        "evidence": {
+          "releaseManifestPath": "./.data/demo/artifacts/releases/rel-2026.10.0/release-manifest.json",
+          "manifestCount": 3
+        }
+      },
+      {
+        "id": "INV-3-NO-FAILED-ATTEMPT-ARTIFACTS-ACTIVE",
+        "number": 3,
+        "description": "No artifacts from the failed attempt remain active",
+        "status": "VERIFIED",
+        "evidence": {
+          "attempt1Recorded": 3,
+          "activeInDb": 0,
+          "remainingFiles": []
+        }
+      },
+      {
+        "id": "INV-4-SAGA-COMPENSATIONS-RECORDED-AND-APPLIED",
+        "number": 4,
+        "description": "Compensations were actually recorded and applied",
+        "status": "VERIFIED",
+        "evidence": {
+          "lockStatus": "COMPENSATED",
+          "compensatedArtifacts": 3
+        }
+      },
+      {
+        "id": "INV-5-NO-DUPLICATE-EXTERNAL-COMMITS",
+        "number": 5,
+        "description": "No duplicate externally committed logical operation exists",
+        "status": "VERIFIED",
+        "evidence": {
+          "totalRows": 6,
+          "uniqueIdempotencyKeys": 6,
+          "duplicates": []
+        }
+      },
+      {
+        "id": "INV-6-MULTI-INSTANCE-PARTICIPATION",
+        "number": 6,
+        "description": "At least two distinct instances participated in distributed execution",
+        "status": "VERIFIED",
+        "evidence": {
+          "distinctWorkerCount": 2,
+          "workerInstanceIds": [
+            "2cfa9c79-b0c0-43d4-b1e5-3124f9f77098",
+            "bfa0c7de-86c6-4cc6-9536-5b55124bb544"
+          ]
+        }
+      },
+      {
+        "id": "INV-7-ZOMBIE-WORKER-FENCED",
+        "number": 7,
+        "description": "Zombie worker fenced at both external ledger and AGBoss LeasedCheckpointSaver/execution_leases tables",
+        "status": "VERIFIED",
+        "evidence": {
+          "stalledInstanceId": "bfa0c7de-86c6-4cc6-9536-5b55124bb544",
+          "executionId": "f9907abf-19fd-498b-8397-49152e25345f",
+          "agbossExecutionLeaseEpoch": 2,
+          "agbossExecutionLeaseHolder": "2cfa9c79-b0c0-43d4-b1e5-3124f9f77098",
+          "agbossExecutionLeaseReleased": 1,
+          "agbossCheckpointCount": 6,
+          "agbossLinearCheckpointChainNoZombieFork": true
+        }
+      },
+      {
+        "id": "INV-8-ORIGINAL-LOGICAL-TASK-COMPLETED-AFTER-TAKEOVER",
+        "number": 8,
+        "description": "Original child execution recovered on replacement instance and verified in AGBoss execution_leases & child_execution_queue",
+        "status": "VERIFIED",
+        "evidence": {
+          "logicalTaskId": "rel-2026.10.0:payment-engine",
+          "preservedExecutionId": "f9907abf-19fd-498b-8397-49152e25345f",
+          "preparedBy": "bfa0c7de-86c6-4cc6-9536-5b55124bb544",
+          "takenOverBy": "2cfa9c79-b0c0-43d4-b1e5-3124f9f77098",
+          "committedLeaseEpoch": 2,
+          "agbossLeaseHolderMatchesCommitter": true,
+          "orphanedChildQueueRows": 0
+        }
+      }
+    ]
+  },
+  "ledgerTimeline": [
+    {
+      "eventId": 1,
+      "attempt": 1,
+      "task": "rel-2026.10.0:auth-service",
+      "operation": "PREPARE_MODULE",
+      "outcome": "APPLIED",
+      "instanceId": "2cfa9c79-b0c0-43d4-b1e5-3124f9f77098",
+      "leaseEpoch": 1,
+      "executionId": "fc4723ab-f4a6-4d2a-ac60-9390947cde88",
+      "idempotencyKey": "fc4723ab-f4a6-4d2a-ac60-9390947cde88:prepare-module-candidate-action:1"
+    },
+    {
+      "eventId": 2,
+      "attempt": 1,
+      "task": "rel-2026.10.0:auth-service",
+      "operation": "STAGE_ARTIFACT",
+      "outcome": "APPLIED",
+      "instanceId": "2cfa9c79-b0c0-43d4-b1e5-3124f9f77098",
+      "leaseEpoch": 1,
+      "executionId": "fc4723ab-f4a6-4d2a-ac60-9390947cde88",
+      "idempotencyKey": "fc4723ab-f4a6-4d2a-ac60-9390947cde88:stage-module-artifact-action:1"
+    },
+    {
+      "eventId": 3,
+      "attempt": 1,
+      "task": "rel-2026.10.0:payment-engine",
+      "operation": "PREPARE_MODULE",
+      "outcome": "APPLIED",
+      "instanceId": "bfa0c7de-86c6-4cc6-9536-5b55124bb544",
+      "leaseEpoch": 1,
+      "executionId": "9bc069ac-7799-4c02-a221-c8b29f4fe504",
+      "idempotencyKey": "9bc069ac-7799-4c02-a221-c8b29f4fe504:prepare-module-candidate-action:1"
+    },
+    {
+      "eventId": 4,
+      "attempt": 1,
+      "task": "rel-2026.10.0:telemetry-collector",
+      "operation": "PREPARE_MODULE",
+      "outcome": "APPLIED",
+      "instanceId": "bfa0c7de-86c6-4cc6-9536-5b55124bb544",
+      "leaseEpoch": 1,
+      "executionId": "526fdb32-9871-4b27-a0ef-63c5c576c4b6",
+      "idempotencyKey": "526fdb32-9871-4b27-a0ef-63c5c576c4b6:prepare-module-candidate-action:1"
+    },
+    {
+      "eventId": 5,
+      "attempt": 1,
+      "task": "rel-2026.10.0:payment-engine",
+      "operation": "STAGE_ARTIFACT",
+      "outcome": "APPLIED",
+      "instanceId": "bfa0c7de-86c6-4cc6-9536-5b55124bb544",
+      "leaseEpoch": 1,
+      "executionId": "9bc069ac-7799-4c02-a221-c8b29f4fe504",
+      "idempotencyKey": "9bc069ac-7799-4c02-a221-c8b29f4fe504:stage-module-artifact-action:1"
+    },
+    {
+      "eventId": 6,
+      "attempt": 1,
+      "task": "rel-2026.10.0:telemetry-collector",
+      "operation": "STAGE_ARTIFACT",
+      "outcome": "APPLIED",
+      "instanceId": "bfa0c7de-86c6-4cc6-9536-5b55124bb544",
+      "leaseEpoch": 1,
+      "executionId": "526fdb32-9871-4b27-a0ef-63c5c576c4b6",
+      "idempotencyKey": "526fdb32-9871-4b27-a0ef-63c5c576c4b6:stage-module-artifact-action:1"
+    },
+    {
+      "eventId": 7,
+      "attempt": 1,
+      "task": "rel-2026.10.0:candidate-lock",
+      "operation": "LOCK_CANDIDATE",
+      "outcome": "APPLIED",
+      "instanceId": "02d0a132-5193-4f65-b50e-331e82a5a0ad",
+      "leaseEpoch": 1,
+      "executionId": "2be7d7f8-c575-4846-b261-c1ef4aea5e93",
+      "idempotencyKey": "2be7d7f8-c575-4846-b261-c1ef4aea5e93:lock-release-candidate-action:1"
+    },
+    {
+      "eventId": 8,
+      "attempt": 1,
+      "task": "rel-2026.10.0:smoke-gate",
+      "operation": "VERIFY_SMOKE_GATE",
+      "outcome": "FAILED_INJECTED",
+      "instanceId": "02d0a132-5193-4f65-b50e-331e82a5a0ad",
+      "leaseEpoch": 1,
+      "executionId": "2be7d7f8-c575-4846-b261-c1ef4aea5e93",
+      "idempotencyKey": "2be7d7f8-c575-4846-b261-c1ef4aea5e93:verify-release-smoke-gate-action:1"
+    },
+    {
+      "eventId": 9,
+      "attempt": 1,
+      "task": "rel-2026.10.0:telemetry-collector",
+      "operation": "COMPENSATE_ARTIFACT",
+      "outcome": "COMPENSATED",
+      "instanceId": "02d0a132-5193-4f65-b50e-331e82a5a0ad",
+      "leaseEpoch": 1,
+      "executionId": "2be7d7f8-c575-4846-b261-c1ef4aea5e93",
+      "idempotencyKey": "2be7d7f8-c575-4846-b261-c1ef4aea5e93:compensate-release-candidate-action:1:telemetry-collector"
+    },
+    {
+      "eventId": 10,
+      "attempt": 1,
+      "task": "rel-2026.10.0:payment-engine",
+      "operation": "COMPENSATE_ARTIFACT",
+      "outcome": "COMPENSATED",
+      "instanceId": "02d0a132-5193-4f65-b50e-331e82a5a0ad",
+      "leaseEpoch": 1,
+      "executionId": "2be7d7f8-c575-4846-b261-c1ef4aea5e93",
+      "idempotencyKey": "2be7d7f8-c575-4846-b261-c1ef4aea5e93:compensate-release-candidate-action:1:payment-engine"
+    },
+    {
+      "eventId": 11,
+      "attempt": 1,
+      "task": "rel-2026.10.0:auth-service",
+      "operation": "COMPENSATE_ARTIFACT",
+      "outcome": "COMPENSATED",
+      "instanceId": "02d0a132-5193-4f65-b50e-331e82a5a0ad",
+      "leaseEpoch": 1,
+      "executionId": "2be7d7f8-c575-4846-b261-c1ef4aea5e93",
+      "idempotencyKey": "2be7d7f8-c575-4846-b261-c1ef4aea5e93:compensate-release-candidate-action:1:auth-service"
+    },
+    {
+      "eventId": 12,
+      "attempt": 1,
+      "task": "rel-2026.10.0:candidate-lock",
+      "operation": "COMPENSATE_CANDIDATE",
+      "outcome": "COMPENSATED",
+      "instanceId": "02d0a132-5193-4f65-b50e-331e82a5a0ad",
+      "leaseEpoch": 1,
+      "executionId": "2be7d7f8-c575-4846-b261-c1ef4aea5e93",
+      "idempotencyKey": "2be7d7f8-c575-4846-b261-c1ef4aea5e93:compensate-release-candidate-action:1"
+    },
+    {
+      "eventId": 13,
+      "attempt": 2,
+      "task": "rel-2026.10.0:auth-service",
+      "operation": "PREPARE_MODULE",
+      "outcome": "APPLIED",
+      "instanceId": "2cfa9c79-b0c0-43d4-b1e5-3124f9f77098",
+      "leaseEpoch": 1,
+      "executionId": "e8729e0b-41a1-44d1-87ad-a0d0ecfcde1f",
+      "idempotencyKey": "e8729e0b-41a1-44d1-87ad-a0d0ecfcde1f:prepare-module-candidate-action:1"
+    },
+    {
+      "eventId": 14,
+      "attempt": 2,
+      "task": "rel-2026.10.0:auth-service",
+      "operation": "STAGE_ARTIFACT",
+      "outcome": "APPLIED",
+      "instanceId": "2cfa9c79-b0c0-43d4-b1e5-3124f9f77098",
+      "leaseEpoch": 1,
+      "executionId": "e8729e0b-41a1-44d1-87ad-a0d0ecfcde1f",
+      "idempotencyKey": "e8729e0b-41a1-44d1-87ad-a0d0ecfcde1f:stage-module-artifact-action:1"
+    },
+    {
+      "eventId": 15,
+      "attempt": 2,
+      "task": "rel-2026.10.0:payment-engine",
+      "operation": "PREPARE_MODULE",
+      "outcome": "APPLIED",
+      "instanceId": "bfa0c7de-86c6-4cc6-9536-5b55124bb544",
+      "leaseEpoch": 1,
+      "executionId": "f9907abf-19fd-498b-8397-49152e25345f",
+      "idempotencyKey": "f9907abf-19fd-498b-8397-49152e25345f:prepare-module-candidate-action:1"
+    },
+    {
+      "eventId": 16,
+      "attempt": 2,
+      "task": "rel-2026.10.0:telemetry-collector",
+      "operation": "PREPARE_MODULE",
+      "outcome": "APPLIED",
+      "instanceId": "bfa0c7de-86c6-4cc6-9536-5b55124bb544",
+      "leaseEpoch": 1,
+      "executionId": "00394a13-fc4a-4163-a601-d7c9f8438ffb",
+      "idempotencyKey": "00394a13-fc4a-4163-a601-d7c9f8438ffb:prepare-module-candidate-action:1"
+    },
+    {
+      "eventId": 17,
+      "attempt": 2,
+      "task": "rel-2026.10.0:telemetry-collector",
+      "operation": "STAGE_ARTIFACT",
+      "outcome": "APPLIED",
+      "instanceId": "bfa0c7de-86c6-4cc6-9536-5b55124bb544",
+      "leaseEpoch": 1,
+      "executionId": "00394a13-fc4a-4163-a601-d7c9f8438ffb",
+      "idempotencyKey": "00394a13-fc4a-4163-a601-d7c9f8438ffb:stage-module-artifact-action:1"
+    },
+    {
+      "eventId": 18,
+      "attempt": 2,
+      "task": "rel-2026.10.0:payment-engine",
+      "operation": "WORKER_STALLED_LEASE_EXPIRED",
+      "outcome": "STALLED",
+      "instanceId": "bfa0c7de-86c6-4cc6-9536-5b55124bb544",
+      "leaseEpoch": 1,
+      "executionId": "f9907abf-19fd-498b-8397-49152e25345f",
+      "idempotencyKey": "f9907abf-19fd-498b-8397-49152e25345f:stage-module-artifact-action:1"
+    },
+    {
+      "eventId": 19,
+      "attempt": 2,
+      "task": "rel-2026.10.0:payment-engine",
+      "operation": "LEASE_TAKEOVER_COMPLETED",
+      "outcome": "APPLIED",
+      "instanceId": "2cfa9c79-b0c0-43d4-b1e5-3124f9f77098",
+      "leaseEpoch": 2,
+      "executionId": "f9907abf-19fd-498b-8397-49152e25345f",
+      "idempotencyKey": "f9907abf-19fd-498b-8397-49152e25345f:stage-module-artifact-action:1"
+    },
+    {
+      "eventId": 20,
+      "attempt": 2,
+      "task": "rel-2026.10.0:payment-engine",
+      "operation": "STAGE_ARTIFACT",
+      "outcome": "APPLIED",
+      "instanceId": "2cfa9c79-b0c0-43d4-b1e5-3124f9f77098",
+      "leaseEpoch": 2,
+      "executionId": "f9907abf-19fd-498b-8397-49152e25345f",
+      "idempotencyKey": "f9907abf-19fd-498b-8397-49152e25345f:stage-module-artifact-action:1"
+    },
+    {
+      "eventId": 21,
+      "attempt": 2,
+      "task": "rel-2026.10.0:payment-engine",
+      "operation": "RUNTIME_LEASE_FENCED",
+      "outcome": "REJECTED_BY_AGBOSS_LEASE_FENCE",
+      "instanceId": "bfa0c7de-86c6-4cc6-9536-5b55124bb544",
+      "leaseEpoch": 1,
+      "executionId": "f9907abf-19fd-498b-8397-49152e25345f",
+      "idempotencyKey": "fence:f9907abf-19fd-498b-8397-49152e25345f:epoch-1"
+    },
+    {
+      "eventId": 22,
+      "attempt": 2,
+      "task": "rel-2026.10.0:payment-engine",
+      "operation": "ZOMBIE_WRITE_REJECTED",
+      "outcome": "REJECTED_STALE_LEASE",
+      "instanceId": "bfa0c7de-86c6-4cc6-9536-5b55124bb544",
+      "leaseEpoch": 1,
+      "executionId": "f9907abf-19fd-498b-8397-49152e25345f",
+      "idempotencyKey": "f9907abf-19fd-498b-8397-49152e25345f:stage-module-artifact-action:1"
+    },
+    {
+      "eventId": 23,
+      "attempt": 2,
+      "task": "rel-2026.10.0:candidate-lock",
+      "operation": "LOCK_CANDIDATE",
+      "outcome": "APPLIED",
+      "instanceId": "02d0a132-5193-4f65-b50e-331e82a5a0ad",
+      "leaseEpoch": 1,
+      "executionId": "bbd3d722-6ab2-4493-94c1-177e49035dd9",
+      "idempotencyKey": "bbd3d722-6ab2-4493-94c1-177e49035dd9:lock-release-candidate-action:1"
+    },
+    {
+      "eventId": 24,
+      "attempt": 2,
+      "task": "rel-2026.10.0:release-promotion",
+      "operation": "PROMOTE_RELEASE",
+      "outcome": "APPLIED",
+      "instanceId": "02d0a132-5193-4f65-b50e-331e82a5a0ad",
+      "leaseEpoch": 1,
+      "executionId": "bbd3d722-6ab2-4493-94c1-177e49035dd9",
+      "idempotencyKey": "bbd3d722-6ab2-4493-94c1-177e49035dd9:promote-release-artifacts-action:1"
+    }
+  ]
+}

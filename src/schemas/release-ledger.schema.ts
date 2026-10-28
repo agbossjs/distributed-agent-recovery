@@ -1,5 +1,9 @@
 import { integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
-import type { ExecutionLeaseRow } from "./agboss-cluster.schema.js";
+import type {
+  AgbossCheckpointRow,
+  ChildExecutionQueueRow,
+  ExecutionLeaseRow,
+} from "./agboss-cluster.schema.js";
 
 export type ArtifactStatus = "STAGED" | "COMPENSATED" | "PROMOTED";
 export type CandidateLockStatus = "LOCKED" | "COMPENSATED" | "PROMOTED";
@@ -110,4 +114,6 @@ export interface LedgerSnapshot {
   readonly fencingTokens: readonly FencingTokenRow[];
   readonly events: readonly LedgerEventRow[];
   readonly executionLeases: readonly ExecutionLeaseRow[];
+  readonly childQueue: readonly ChildExecutionQueueRow[];
+  readonly checkpoints: readonly AgbossCheckpointRow[];
 }

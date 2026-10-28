@@ -102,6 +102,35 @@ describe("ModuleWorkerWorkflow — Same-Task Takeover & Two-Layer Zombie Fencing
         errorCode?: string;
       };
       expect(details.errorCode).toBe(ExecutionLeaseLostError.code);
+
+      // Independent verification directly against AGBoss's own core SQLite tables
+      // (`execution_leases`, `checkpoints`, `child_execution_queue`) without relying on `ledger_events`:
+      const agbossLeaseRow = snap.executionLeases.find(
+        (row) => row.rootExecutionId === committed.executionId,
+      );
+      expect(agbossLeaseRow).toBeDefined();
+      expect(agbossLeaseRow?.leaseEpoch).toBe(2);
+      expect(agbossLeaseRow?.holderInstanceId).toBe(committed.committedByInstanceId);
+      expect(agbossLeaseRow?.holderInstanceId).not.toBe(committed.preparedByInstanceId);
+      expect(agbossLeaseRow?.released).toBe(1);
+
+      const childCheckpoints = snap.checkpoints.filter(
+        (c) =>
+          c.threadId === committed.executionId ||
+          c.threadId.endsWith(`/child/${committed.executionId}`),
+      );
+      expect(childCheckpoints.length).toBeGreaterThanOrEqual(4);
+      const uniqueParentCheckpoints = new Set(
+        childCheckpoints.map((c) => c.parentCheckpointId ?? "__root__"),
+      );
+      // Unbranched linear parent_checkpoint_id chain proves LeasedCheckpointSaver fenced
+      // the zombie worker's stale putWrites() without creating a split-brain checkpoint fork.
+      expect(uniqueParentCheckpoints.size).toBe(childCheckpoints.length);
+
+      const stuckQueueRows = snap.childQueue.filter(
+        (q) => q.executionId === committed.executionId && q.status !== "finished",
+      );
+      expect(stuckQueueRows).toHaveLength(0);
     } finally {
       await Promise.all([
         workerA.close(),

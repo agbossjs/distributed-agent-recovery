@@ -153,27 +153,37 @@ function checkZombieFencingAndTakeover(
   const runtimeFence = snap.events.find((e) => e.operation === "RUNTIME_LEASE_FENCED");
   const takeover = snap.events.find((e) => e.operation === "LEASE_TAKEOVER_COMPLETED");
 
-  const inv7Ok =
-    stall !== undefined && zombieRej !== undefined && runtimeFence !== undefined &&
-    stall.instanceId === zombieRej.instanceId && stall.leaseEpoch === 1;
-  const recovered = promoted.find((a) => a.logicalTaskId === stall?.logicalTaskId);
-  const inv8Ok =
-    stall !== undefined && takeover !== undefined && recovered !== undefined &&
-    recovered.executionId === stall.executionId &&
-    recovered.preparedByInstanceId === stall.instanceId &&
-    recovered.committedByInstanceId !== recovered.preparedByInstanceId &&
-    recovered.leaseEpoch >= 2;
+  const agbossLease = snap.executionLeases.find((l) => l.rootExecutionId === stall?.executionId);
+  const childCps = stall === undefined ? [] : snap.checkpoints.filter(
+    (c) => c.threadId === stall.executionId || c.threadId.endsWith(`/child/${stall.executionId}`),
+  );
+  const linearCpChain = childCps.length >= 4 && new Set(childCps.map((c) => c.parentCheckpointId ?? "__root__")).size === childCps.length;
+  const leaseFenced = agbossLease !== undefined && agbossLease.leaseEpoch >= 2 && agbossLease.holderInstanceId !== stall?.instanceId && agbossLease.released === 1;
+  const orphanedQueue = snap.childQueue.filter((q) => q.executionId === stall?.executionId && q.status !== "finished");
+
+  const expectHardCrash = process.env["AGBOSS_CRASH_WORKER_ON_STALL"] === "true";
+  const zombieFenced = expectHardCrash
+    ? zombieRej === undefined
+    : zombieRej !== undefined && runtimeFence !== undefined && stall?.instanceId === zombieRej.instanceId;
+  const inv7Ok = stall !== undefined && stall.leaseEpoch === 1 && zombieFenced && leaseFenced && linearCpChain;
+  const rec = promoted.find((a) => a.logicalTaskId === stall?.logicalTaskId);
+  const inv8Ok = stall !== undefined && takeover !== undefined && rec !== undefined &&
+    rec.executionId === stall.executionId && rec.preparedByInstanceId === stall.instanceId &&
+    rec.committedByInstanceId !== rec.preparedByInstanceId && rec.leaseEpoch >= 2 &&
+    agbossLease?.holderInstanceId === rec.committedByInstanceId && agbossLease.leaseEpoch === rec.leaseEpoch && orphanedQueue.length === 0;
 
   return [
-    check(7, "INV-7-ZOMBIE-WORKER-FENCED", "The intended zombie/stale-worker scenario was actually exercised", inv7Ok, {
+    check(7, "INV-7-ZOMBIE-WORKER-FENCED", "Zombie worker fenced at both external ledger and AGBoss LeasedCheckpointSaver/execution_leases tables", inv7Ok, {
       stalledInstanceId: stall?.instanceId ?? null, executionId: stall?.executionId ?? null,
+      agbossExecutionLeaseEpoch: agbossLease?.leaseEpoch ?? null, agbossExecutionLeaseHolder: agbossLease?.holderInstanceId ?? null,
+      agbossExecutionLeaseReleased: agbossLease?.released ?? null, agbossCheckpointCount: childCps.length,
+      agbossLinearCheckpointChainNoZombieFork: linearCpChain,
     }),
-    check(8, "INV-8-ORIGINAL-LOGICAL-TASK-COMPLETED-AFTER-TAKEOVER", "The original logical task was completed after takeover", inv8Ok, {
-      logicalTaskId: stall?.logicalTaskId ?? null,
-      preservedExecutionId: recovered?.executionId ?? null,
-      preparedBy: recovered?.preparedByInstanceId ?? null,
-      takenOverBy: recovered?.committedByInstanceId ?? null,
-      committedLeaseEpoch: recovered?.leaseEpoch ?? null,
+    check(8, "INV-8-ORIGINAL-LOGICAL-TASK-COMPLETED-AFTER-TAKEOVER", "Original child execution recovered on replacement instance and verified in AGBoss execution_leases & child_execution_queue", inv8Ok, {
+      logicalTaskId: stall?.logicalTaskId ?? null, preservedExecutionId: rec?.executionId ?? null,
+      preparedBy: rec?.preparedByInstanceId ?? null, takenOverBy: rec?.committedByInstanceId ?? null,
+      committedLeaseEpoch: rec?.leaseEpoch ?? null, agbossLeaseHolderMatchesCommitter: agbossLease?.holderInstanceId === rec?.committedByInstanceId,
+      orphanedChildQueueRows: orphanedQueue.length,
     }),
   ];
 }

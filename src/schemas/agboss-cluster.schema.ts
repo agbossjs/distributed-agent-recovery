@@ -34,6 +34,20 @@ export const childExecutionQueueTable = sqliteTable(
   (table) => [primaryKey({ columns: [table.tenantId, table.executionId] })],
 );
 
+export const checkpointsTable = sqliteTable(
+  "checkpoints",
+  {
+    threadId: text("thread_id").notNull(),
+    checkpointNs: text("checkpoint_ns").notNull(),
+    checkpointId: text("checkpoint_id").notNull(),
+    parentCheckpointId: text("parent_checkpoint_id"),
+    tenantId: text("tenant_id").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.threadId, table.checkpointNs, table.checkpointId] }),
+  ],
+);
+
 export const sqliteMasterTable = sqliteTable("sqlite_master", {
   type: text("type").notNull(),
   name: text("name").notNull(),
@@ -41,3 +55,4 @@ export const sqliteMasterTable = sqliteTable("sqlite_master", {
 
 export type ExecutionLeaseRow = typeof executionLeasesTable.$inferSelect;
 export type ChildExecutionQueueRow = typeof childExecutionQueueTable.$inferSelect;
+export type AgbossCheckpointRow = typeof checkpointsTable.$inferSelect;

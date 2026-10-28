@@ -137,7 +137,7 @@ export class LedgerDatabaseRepository {
     sqlitePath: string,
     work: (db: LedgerDrizzleExecutor) => Promise<TResult>,
   ): Promise<TResult> {
-    const database = new DatabaseSync(sqlitePath);
+    const database = new DatabaseSync(sqlitePath, { timeout: 5000 });
     database.exec("PRAGMA busy_timeout = 5000;");
     try {
       return await work(createDirectDrizzle(database));
@@ -175,7 +175,7 @@ export class LedgerDatabaseRepository {
       return existing;
     }
     this.connection.database.exec("PRAGMA busy_timeout = 5000;");
-    this.connection.database.exec(RELEASE_LEDGER_DDL);
+    this.connection.ensureSchema("release-ledger", RELEASE_LEDGER_DDL);
     const created = createDirectDrizzle(this.connection.database);
     initializedConnections.set(this.connection, created);
     return created;
