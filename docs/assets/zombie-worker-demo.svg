@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="660" viewBox="0 0 1120 660">
-  <rect width="1120" height="660" rx="14" fill="#0d1117" stroke="#30363d" stroke-width="2"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="748" viewBox="0 0 1120 748">
+  <rect width="1120" height="748" fill="#0d1117"/>
+  <rect x="1" y="1" width="1118" height="746" rx="12" fill="#0d1117" stroke="#30363d" stroke-width="2"/>
   <rect x="1" y="1" width="1118" height="44" rx="13" fill="#161b22"/>
   <rect x="1" y="32" width="1118" height="14" fill="#161b22"/>
   <line x1="0" y1="45" x2="1120" y2="45" stroke="#30363d" stroke-width="1"/>

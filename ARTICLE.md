@@ -5,7 +5,7 @@ description: "Recovering distributed AI workflows from failed integrations and z
 tags: devchallenge, hf26challenge, ai, opensource
 ---
 
-*This is a submission for the [Hacktoberfest Open-Source AI Challenge: Ghost in the Machine](https://dev.to/devteam/join-the-hacktoberfest-open-source-ai-challenge-ghost-in-the-machine-2850-in-prizes-across-21-3cho).*
+*This is a submission for the [Hacktoberfest Open-Source AI Challenge Week 4: Ghost in the Machine](https://dev.to/challenges/hacktoberfest-week4-2026-10-26).*
 
 # Ghost in the Machine: The Zombie AI Worker
 
@@ -30,6 +30,9 @@ Then you deploy across multiple worker processes or containers, and two classic 
 To solve both failure modes cleanly—and prove every guarantee experimentally—I built [**`agbossjs/distributed-agent-recovery`**](https://github.com/agbossjs/distributed-agent-recovery), an open-source distributed recovery showcase powered by [**AGBoss**](https://github.com/agbossjs/agboss) (`@agboss/core@0.1.0` and `@agboss/cli@0.1.0`, documentation at [agboss.dev](https://agboss.dev)).
 
 The showcase pairs **deterministic distributed systems guarantees** (lease ownership, checkpoint continuation, monotonic fencing tokens, and LIFO Saga compensation) with **typed LLM recovery planning** (`ReleaseRecoveryPlannerAgent` running `openai/gpt-4o-mini`), verified across real OS worker processes (`SIGSTOP`/`SIGCONT`), a 4-container Docker Compose cluster (including hard `exit 137` container death), and a single-node Kubernetes (`kind`) deployment.
+
+**What makes this a genuine AI application (and why the boundary matters):**  
+Asking an LLM to delete orphaned staging files or track lease ownership via prompt instructions is non-deterministic and brittle—that belongs to deterministic workflow infrastructure. Conversely, diagnosing an unstructured build/integration smoke-gate failure and synthesizing corrected compiler flags across modules is an unstructured reasoning task where an LLM agent shines. Once deterministic Saga compensation rolls back Attempt 1's staged files, `ReleaseRecoveryPlannerAgent` (`openai/gpt-4o-mini`, governed by `@Budget` cost guardrails) autonomously invokes `InspectFailedAttemptTool` against the SQLite ledger to confirm cleanup succeeded, diagnoses the ABI mismatch (`payment-engine requires --abi-compat=v2`), and emits a schema-validated `RecoveryPlanDto` that drives Attempt 2.
 
 ---
 
@@ -71,6 +74,39 @@ Here is what actually happened on the machine (recorded verbatim in [`docs/evide
      ```
    - Worker `PID 2772` skipped Step 1 (already checkpointed), committed Step 2 under `leaseEpoch = 2` with the preserved step idempotency key `f9907abf-19fd-498b-8397-49152e25345f:stage-module-artifact-action:1`, and later sent `SIGCONT` to wake the frozen worker.
    - When Zombie Worker `PID 2783` resumed with stale `leaseEpoch = 1`, its external artifact write was rejected by `LeaseFencingService` (`ZOMBIE_WRITE_REJECTED`), and its subsequent checkpoint write was rejected by AGBoss's `LeasedCheckpointSaver` (`ExecutionLeaseLostError` / `execution.lease-lost`).
+
+---
+
+## Code
+
+Repository: [**github.com/agbossjs/distributed-agent-recovery**](https://github.com/agbossjs/distributed-agent-recovery) (verified CI run: [Actions Run #40633290740](https://github.com/agbossjs/distributed-agent-recovery/actions/runs/40633290740)).
+
+Requires **Node.js `>= 22.13.0`** (uses built-in `node:sqlite`). By default, tests and demos run **100% offline ($0 cost)** using a deterministic OpenRouter transport stub:
+
+```bash
+git clone https://github.com/agbossjs/distributed-agent-recovery.git
+cd distributed-agent-recovery
+
+npm ci
+npm run check
+npm test
+npm run demo:cluster
+npm run verify
+```
+
+Optional live LLM (`openai/gpt-4o-mini`), real-clock POSIX `SIGSTOP`, and Docker Compose runs:
+
+```bash
+# Live OpenRouter inference (ReleaseRecoveryPlannerAgent + InspectFailedAttemptTool):
+OPENROUTER_API_KEY="sk-or-v1-..." npm run demo:live
+
+# Real 30s lease TTL + POSIX SIGSTOP/SIGCONT OS worker freeze:
+npm run build
+node dist/src/demo.js --cluster --real-clock
+
+# 4-container Docker Compose cluster (auto-cleans containers & volume on exit):
+npm run demo:compose
+```
 
 ---
 
@@ -168,22 +204,24 @@ Checking only that an application log contains `"ZOMBIE_WRITE_REJECTED"` is not 
 - **`checkpoints`**: Traverses every LangGraph checkpoint row (`6` checkpoints for the recovered child execution) and verifies that `parent_checkpoint_id` forms a **single strictly linear unbranched chain**—proving `LeasedCheckpointSaver` blocked the zombie worker from writing a competing checkpoint fork.
 - **`child_execution_queue`**: Confirms `0` unclaimed or orphaned child execution rows remain.
 
+*(Note: reading `@agboss/core@0.1.0`'s internal SQLite tables directly in `ClusterSnapshotRepository` is a verification-only diagnostic technique for proving runtime invariants, not a recommended application integration API.)*
+
 All 8 invariants run automatically on every push in GitHub Actions across **three CI environments**:
 1. **Node 24 Real-Clock POSIX `SIGSTOP`/`SIGCONT` Multi-Process Gate** (`node dist/src/demo.js --cluster --real-clock`).
 2. **4-Container Docker Compose & Hard Worker-Crash (`exit 137`) Gate** (verifying both zombie stall takeover and abrupt container death mid-step).
 3. **Single-Node Kubernetes (`kind`) Gate** (`Deployment/agboss-worker` with `replicas: 2` + `Job/agboss-release-coordinator`).
 
+### 5. Guarantee Boundaries & Trade-offs
+
+- **At-Least-Once Execution with Idempotent Effects & Fencing (Not "Exactly-Once")**: Lease takeover replays unfinished steps *at-least-once* from the last committed checkpoint. Duplicate external commits are prevented not by claiming "exactly-once process execution," but by combining deterministic per-step idempotency keys (`<executionId>:<nodeId>:<visitNumber>`) with monotonic `leaseEpoch` fencing in the application ledger.
+- **Reversible Compensation vs. Hard-Kill Lease Recovery**: Saga compensation only undoes *reversible* operations (such as deleting staged candidate files prior to final promotion) when an active workflow hits a downstream error (`ReleaseGateFailedError`); irreversible external effects must still be gated behind final promotion or an outbox. Moreover, a hard-killed worker (`SIGKILL` / `exit 137`) does not run in-process compensation when it dies—instead, its lease expires and a surviving worker resumes the child execution from its last checkpoint.
+- **Fixed Worker Pool Failover (No Autoscaler Claimed)**: Work is distributed and recovered across a fixed pool of worker processes/containers (`ChildPlacement.AnyInstance`). Dynamic horizontal autoscaling (e.g., HPA/KEDA scaling pods on queue depth) is orthogonal and not claimed here.
+- **Single-Host Shared SQLite `WAL` vs. Multi-Host Distributed Storage**: Sharing a SQLite database in `WAL` mode across OS processes, Docker Compose containers, or single-node `kind` pods gives anyone a zero-dependency distributed sandbox relying on single-host kernel file locks. Multi-node clusters across separate hosts require network-backed storage repositories (such as PostgreSQL) implementing the same monotonic `leaseEpoch` fencing contract.
+- **Cooperative External I/O Fencing**: Neither Node.js nor LangGraph can pre-empt an in-flight userland syscall mid-step without killing the process; any external store mutated *inside* an `@Action` must validate the monotonic `leaseEpoch` fencing token or `step.idempotencyKey`.
+
 ---
 
-## Guarantee Boundaries & Trade-offs
-
-- **Fixed Worker Pool Failover (No Autoscaler Claimed)**: Work is distributed and recovered across a fixed pool of worker processes/containers (`ChildPlacement.AnyInstance`). Dynamic horizontal autoscaling (e.g., KEDA scaling pods on queue depth) is orthogonal and intentionally out of scope for this showcase.
-- **Single-Host Shared SQLite `WAL` vs. Multi-Host PostgreSQL**: Sharing a SQLite database in `WAL` mode across OS processes, Docker Compose containers, or single-node `kind` pods gives anyone a zero-dependency distributed sandbox they can run in 60 seconds. Because SQLite relies on host-kernel file locks, multi-node Kubernetes clusters across separate VMs must swap the SQLite repositories for network-backed database repositories (such as PostgreSQL) using the exact same `leaseEpoch` fencing contract.
-- **Cooperative External I/O Fencing**: Neither Node.js nor LangGraph can forcibly pre-empt an in-flight userland function mid-syscall without killing the process; any external store mutated *inside* an `@Action` must validate the monotonic `leaseEpoch` fencing token or `step.idempotencyKey`.
-
----
-
-## Why Open Innovation Matters
+## Why Does Open Innovation Matter?
 
 Today's open-source AI ecosystem has hundreds of libraries for prompt chaining, yet surprisingly few open, inspectable references for what happens when distributed AI workflows meet real infrastructure failures—stalled containers, expired leases, half-committed side effects, and split-brain retries.
 

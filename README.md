@@ -74,7 +74,7 @@ In addition to deterministic offline tests, [`docs/evidence/live-real-clock-clus
 | **Execution Mode** | `mode: "live-openrouter"`, `clockMode: "real-30s-clock"`, `faultMode: "os-sigstop-natural-lease-expiry"` |
 | **OS Processes** | Coordinator `PID 2768` + Worker `PID 2772` (`2cfa9c79-...`) + Worker `PID 2783` (`bfa0c7de-...`) |
 | **Attempt 1 (`executionId`)** | `2be7d7f8-c575-4846-b261-c1ef4aea5e93` -> `ReleaseGateFailedError` -> `compensationsCount: 1` (3 files deleted) |
-| **Live LLM Spend (`openai/gpt-4o-mini`)** | `calls: 2` (`InspectFailedAttemptTool` + structured `RecoveryPlanDto`), `1,705` in / `178` out tokens, **`$0.000363`** (`servedBy: ["OpenAI"]`) |
+| **Live LLM Spend (`openai/gpt-4o-mini`)** | `calls: 2` (`InspectFailedAttemptTool` + structured `RecoveryPlanDto`), `1,705` in / `178` out tokens, **`$0.00036255`** (`~$0.000363`, `servedBy: ["OpenAI"]`) |
 | **Attempt 2 (`executionId`)** | `bbd3d722-6ab2-4493-94c1-177e49035dd9` -> `PROMOTED` (`3` modules) |
 | **Recovered Child Execution** | `f9907abf-19fd-498b-8397-49152e25345f` (`rel-2026.10.0:payment-engine`), Step 1 on `bfa0c7de-...` (`epoch=1`), reclaimed from checkpoint `[execution.recovered]` on `2cfa9c79-...` (`epoch=2`) |
 | **AGBoss Core Table Proof** | `execution_leases`: `lease_epoch = 2`, `holder = 2cfa9c79-...`, `released = 1`; `checkpoints`: `6` rows in a single unbranched `parent_checkpoint_id` chain (`noZombieFork: true`); `child_execution_queue`: `0` stuck rows |
@@ -85,47 +85,45 @@ In addition to deterministic offline tests, [`docs/evidence/live-real-clock-clus
 
 ### Prerequisites
 
-- **Node.js `>= 22.13.0`** (uses built-in `node:sqlite`; CI runs on Node.js 24)
+- **Node.js `>= 22.13.0`** (uses built-in `node:sqlite`; CI and Docker images run on Node.js 24)
 - **npm**
 - *(Optional)* **Docker & Docker Compose** (or `kind` + `kubectl`) for containerized cluster runs
-- *(Optional)* `OPENROUTER_API_KEY` for live LLM execution (`openai/gpt-4o-mini`, statically declared on [`ReleaseRecoveryPlannerAgent`](src/agents/release-recovery-planner/release-recovery-planner.agent.ts))
+- *(Optional)* `OPENROUTER_API_KEY` for live LLM inference (`openai/gpt-4o-mini`, statically declared on [`ReleaseRecoveryPlannerAgent`](src/agents/release-recovery-planner/release-recovery-planner.agent.ts))
 
-### 1. Install & Statically Verify the AGBoss Application
+### 1. Recommended First-Time Developer Workflow (100% Offline Default, `$0`)
+
+No API key or external database is required for the default workflow. Offline runs use a deterministic OpenRouter transport stub (`scenarios/offline-openrouter-fetch.ts`) so tests and multi-process cluster runs execute at `$0` cost:
 
 ```bash
-npm install
+npm ci
 npm run check
-```
-
-`npm run check` runs:
-- `agboss check` — statically verifies the `@Application`, `@Workflow`, `@Agent`, `@Action`, `@Tool`, `@HealthCheck`, `@Budget`, environment bindings, prompts, and worst-case execution bounds.
-- `tsc --noEmit` — strict TypeScript typechecking.
-- `eslint .` — `@agboss/core/eslint` (`agboss/no-component-state`, `agboss/no-direct-time`, `FLOW_CHAIN_RULE`) + `typescript-eslint`.
-
-### 2. Run the Full 12-Step Demo & Automated 8-Invariant Verifier (100% Offline Default)
-
-```bash
-npm run demo
+npm test
+npm run demo:cluster
 npm run verify
 ```
 
-Runs the complete two-attempt pipeline offline ($0) and verifies all 8 invariants (`INV-1` through `INV-8`).
+What each command does:
+- `npm ci` — installs locked dependencies cleanly.
+- `npm run check` — runs `agboss check` (compile-time verification of `@Application`, `@Workflow`, `@Agent`, `@Action`, `@Tool`, `@HealthCheck`, `@Budget`, environment bindings, prompts, and worst-case concurrency bounds), `tsc --noEmit`, and `eslint .` (`@agboss/core/eslint` + `typescript-eslint`).
+- `npm test` — runs the Vitest unit and workflow suite (`@agboss/core/testing`).
+- `npm run demo:cluster` — spawns **two independent OS worker processes** ([`worker/main.ts`](worker/main.ts)) plus the coordinator sharing `.data/demo/cluster-state.sqlite` in WAL mode and runs the full 12-step recovery scenario. (Use `npm run demo` for the single-process multi-instance variant.)
+- `npm run verify` — runs the standalone 8-invariant verifier (`INV-1` through `INV-8`) against `.data/demo/cluster-state.sqlite` and `.data/demo/artifacts`.
 
-### 3. Run with a Live LLM Provider (OpenRouter)
+### 2. Offline Mode vs. Live LLM Mode (OpenRouter)
+
+- **Offline Mode (Default)**: All `test` and `demo` scripts default to deterministic offline transport (`mode: "deterministic-offline"`, `$0` spend).
+- **Live OpenRouter Mode (`--live` / `demo:live`)**: Pass `OPENROUTER_API_KEY` to execute real inference via AGBoss's `OpenRouterModelProvider` against `ReleaseRecoveryPlannerAgent`'s statically declared `model: "openai/gpt-4o-mini"`. The live agent calls [`InspectFailedAttemptTool`](src/tools/inspect-failed-attempt.tool.ts) against SQLite to confirm Attempt 1 compensation before returning a typed [`RecoveryPlanDto`](src/dto/recovery-plan.dto.ts):
 
 ```bash
+# Single-command live OpenRouter run:
 OPENROUTER_API_KEY="sk-or-v1-..." npm run demo:live
 ```
 
-Uses AGBoss's built-in `OpenRouterModelProvider` directly against OpenRouter with `ReleaseRecoveryPlannerAgent`'s statically declared `model: "openai/gpt-4o-mini"`. The live agent invokes [`InspectFailedAttemptTool`](src/tools/inspect-failed-attempt.tool.ts) against the SQLite ledger to confirm Attempt 1 compensation before returning the structured [`RecoveryPlanDto`](src/dto/recovery-plan.dto.ts).
+### 3. Real-Clock POSIX `SIGSTOP` / `SIGCONT` Multi-Process Mode
 
-### 4. Run the Multi-Process OS Cluster Demo (Fast Sweep or Real 30s Clock + POSIX `SIGSTOP`)
+By default, `npm run demo:cluster` uses `FastClusterClock` (~3s total runtime) for rapid local feedback. To run compiled production artifacts with **untouched 30-second AGBoss lease sweeps and real POSIX `SIGSTOP`/`SIGCONT` OS worker freezing**:
 
 ```bash
-# Fast multi-process mode (~3s):
-npm run demo:cluster
-
-# Production-compiled real-clock mode (untouched 30s AGBoss lease TTL + POSIX SIGSTOP/SIGCONT):
 npm run build
 node dist/src/demo.js --cluster --real-clock
 
@@ -133,30 +131,31 @@ node dist/src/demo.js --cluster --real-clock
 OPENROUTER_API_KEY="sk-or-v1-..." node dist/src/demo.js --cluster --live --real-clock
 ```
 
-Spawns **two independent OS worker processes** ([`worker/main.ts`](worker/main.ts) / `dist/worker/main.js`) plus the coordinator sharing `.data/demo/cluster-state.sqlite` in WAL mode, executes the full 12-step scenario across OS processes, and verifies all 8 invariants.
+### 4. Automated Vitest Suite Details
 
-### 5. Run the Automated Vitest Suite
-
-```bash
-npm test
-```
-
-Runs the `@agboss/core/testing` unit and workflow test suite mirroring `src/`:
+`npm test` executes four test suites mirroring `src/`:
 - [`tests/tools/inspect-failed-attempt.tool.test.ts`](tests/tools/inspect-failed-attempt.tool.test.ts) — Isolated `@Tool` and `@Action` unit runner verification (`testTool`, `testAction`).
 - [`tests/health-checks/release-cluster.health-check.test.ts`](tests/health-checks/release-cluster.health-check.test.ts) — `checkLiveness()` & `checkReadiness()` verification via `testWith`.
 - [`tests/workflows/module-worker/module-worker.workflow.test.ts`](tests/workflows/module-worker/module-worker.workflow.test.ts) — Same-task takeover (`task-001`), two-layer zombie worker fencing, and direct assertions on AGBoss's `execution_leases`, `checkpoints`, and `child_execution_queue` tables.
 - [`tests/workflows/release-coordinator/release-coordinator.workflow.test.ts`](tests/workflows/release-coordinator/release-coordinator.workflow.test.ts) — `testWith` saga compensation + `mockLlm(ReleaseRecoveryPlannerAgent)` tool-call proof + full 12-step 8-invariant end-to-end test.
 
-### 6. Run with Docker Compose or Local Kubernetes (`kind`)
+### 5. Run with Docker Compose or Local Kubernetes (`kind`)
 
 ```bash
 # 4-container Docker Compose cluster (storage-init + worker-alpha + worker-beta + coordinator):
 npm run demo:compose
 
-# Single-node Kubernetes (kind) Deployment (replicas=2) + Coordinator Job:
+# Explicit cleanup if you run docker compose manually or interrupt a run (stops containers & deletes named volume):
+docker compose -f deploy/compose/docker-compose.yml down -v --remove-orphans
+
+# Optional single-node Kubernetes (kind) Deployment (replicas=2) + Coordinator Job:
 docker build -t agboss/distributed-agent-recovery:latest -f deploy/compose/Dockerfile .
-kind load docker-image agboss/distributed-agent-recovery:latest
+kind create cluster --name agboss-kind
+kind load docker-image agboss/distributed-agent-recovery:latest --name agboss-kind
 kubectl apply -f deploy/kubernetes/local-cluster.yaml
+
+# Clean up the local kind cluster when finished:
+kind delete cluster --name agboss-kind
 ```
 
 ---
@@ -186,15 +185,19 @@ Every push and pull request runs three independent verification jobs:
 | 7 | `INV-7-ZOMBIE-WORKER-FENCED` | Verifies Layer 1 (`ZOMBIE_WRITE_REJECTED`) and Layer 2 (`RUNTIME_LEASE_FENCED` when zombie resumes, or hard process death) **plus independent verification of AGBoss's `execution_leases` (`lease_epoch >= 2`, `holder_instance_id !== stalledInstanceId`, `released = 1`) and `checkpoints` (strictly linear unbranched `parent_checkpoint_id` chain proving zero split-brain zombie checkpoint writes)**. |
 | 8 | `INV-8-ORIGINAL-LOGICAL-TASK-COMPLETED-AFTER-TAKEOVER` | `rel-2026.10.0:payment-engine` preserved the **exact same `childExecutionId` and `idempotencyKey`**, with Step 1 prepared by Worker A (`leaseEpoch = 1`), Step 2 completed by Worker B (`leaseEpoch = 2`), AGBoss `execution_leases.holder_instance_id` matching the committer, and `0` orphaned rows in `child_execution_queue`. |
 
+> **Internal-Schema Diagnostic Note**: [`ClusterSnapshotRepository`](src/repositories/cluster-snapshot.repository.ts) reads AGBoss's internal SQLite tables (`execution_leases`, `checkpoints`, `child_execution_queue`) directly so `INV-7` and `INV-8` can independently audit lease epochs and checkpoint ancestry. This direct table access is a **verification-only diagnostic dependency** coupled to the internal SQLite schema of `@agboss/core@0.1.0`, **not a recommended application integration API**.
+
 ---
 
 ## Responsibility Boundaries & Shared Storage Scope
 
 - **Two-Layer Guarantee Boundary (AGBoss vs. Application Ledger)**:
-  - **AGBoss Runtime** orchestrates deterministic LIFO `compensateWith` execution before error routing, manages 30-second execution lease ownership and background reclamation (`SqliteExecutionLeaseRepository`), resumes recovered executions from their last committed LangGraph checkpoint, and fences stale checkpoint writes via `LeasedCheckpointSaver.putWrites()` (`ExecutionLeaseLostError`).
+  - **AGBoss Runtime** orchestrates deterministic LIFO `compensateWith` / `.onError(...)` execution inside active workflow runs before routing errors, manages 30-second execution lease ownership and expired-lease reclamation (`SqliteExecutionLeaseRepository`), resumes recovered executions from their last committed LangGraph checkpoint, and fences stale checkpoint writes via `LeasedCheckpointSaver.putWrites()` (`ExecutionLeaseLostError`).
   - **Application Actions & SQLite Ledger** ([`CompensateReleaseCandidateAction`](src/actions/compensate-release-candidate.action.ts), [`LeaseFencingService`](src/services/lease-fencing.service.ts), [`ReleaseLedgerService`](src/services/release-ledger.service.ts)) enforce external side-effect idempotency (`step.idempotencyKey`), transactional `leaseEpoch` fencing before writing artifacts, and physical deletion of staged Attempt 1 files—which [`InspectFailedAttemptTool`](src/tools/inspect-failed-attempt.tool.ts) explicitly verifies before the LLM plans Attempt 2.
+- **At-Least-Once Step Execution with Idempotent Effects & Fencing (Not "Exactly-Once")**: Lease takeover executes workflow steps *at-least-once*: when a worker stalls or crashes mid-step after checkpointing Step 1, a surviving worker replays Step 2 from that checkpoint. Duplicate external commits are prevented not by claiming "exactly-once execution," but by combining deterministic per-step idempotency keys (`<executionId>:<nodeId>:<visitNumber>`) with monotonic `leaseEpoch` fencing in the application ledger.
+- **Compensation Scope & Hard-Kill Recovery**: Saga compensation only undoes *reversible* operations (such as deleting staged release candidate files prior to final promotion) when an active workflow encounters a downstream failure (`ReleaseGateFailedError`); it cannot automatically undo arbitrary irreversible external effects (which must be deferred behind a commit gate or outbox). Likewise, a hard-killed worker process (`SIGKILL` / `exit 137`) does not execute in-process compensation on death—instead, its lease expires and a surviving worker resumes the unfinished child execution from its last checkpoint.
 - **Fixed Worker Pool vs. Autoscaling**: This showcase demonstrates work distribution and failover across a fixed pool of worker processes/pods (`ChildPlacement.AnyInstance`), not dynamic horizontal autoscaling.
-- **Single-Host Shared SQLite WAL Scope**: Multiple processes, Docker Compose containers, or single-node `kind` Kubernetes pods share a local SQLite database in `WAL` mode. Single-host shared SQLite WAL provides a zero-dependency reproducible cluster environment; multi-node Kubernetes deployments across separate hosts require network-backed repositories (such as PostgreSQL) implementing the same monotonic `leaseEpoch` fencing contract.
+- **Single-Host Shared SQLite WAL Scope**: Multiple processes, Docker Compose containers, or single-node `kind` Kubernetes pods share a local SQLite database in `WAL` mode. Single-host shared SQLite WAL provides a zero-dependency reproducible cluster environment relying on host-kernel file locks; multi-node distributed deployments across separate hosts require network-backed storage repositories (such as PostgreSQL) implementing the same monotonic `leaseEpoch` fencing contract.
 
 ---
 

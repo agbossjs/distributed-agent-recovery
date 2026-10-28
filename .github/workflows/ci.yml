@@ -68,6 +68,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: real-clock-zombie-recovery-evidence
+          if-no-files-found: error
+          retention-days: 14
           path: |
             /tmp/real-clock-report.json
             /tmp/real-clock-verify.json
@@ -118,7 +120,10 @@ jobs:
             }
             console.log("Docker Compose hard worker-crash (exit 137) failover 8/8 invariants VERIFIED");
           '
-          docker compose -f deploy/compose/docker-compose.yml down -v
+
+      - name: Tear down Docker Compose containers and volumes
+        if: always()
+        run: docker compose -f deploy/compose/docker-compose.yml down -v --remove-orphans || true
 
   kubernetes-kind:
     name: Single-Node Kubernetes (kind) Manifest & 8-Invariant Job Gate

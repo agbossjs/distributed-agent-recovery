@@ -5,6 +5,9 @@
   "description": "Distributed AI workflow recovery, saga compensation, and zombie worker lease fencing with AGBoss",
   "license": "Apache-2.0",
   "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/agbossjs/distributed-agent-recovery.git"
