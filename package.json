@@ -22,7 +22,7 @@
     "demo": "tsx src/demo.ts",
     "demo:live": "tsx src/demo.ts --live",
     "demo:cluster": "tsx src/demo.ts --cluster",
-    "demo:compose": "docker compose -f deploy/compose/docker-compose.yml up --build --abort-on-container-exit --exit-code-from coordinator",
+    "demo:compose": "sh -c 'docker compose -f deploy/compose/docker-compose.yml up -d --build --wait worker-alpha worker-beta && docker compose -f deploy/compose/docker-compose.yml run --rm -T --no-deps coordinator node dist/src/demo.js; CODE=$?; docker compose -f deploy/compose/docker-compose.yml down -v; exit $CODE'",
     "verify": "tsx src/demo.ts --verify-only"
   },
   "dependencies": {

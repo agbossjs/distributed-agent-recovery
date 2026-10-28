@@ -6,6 +6,7 @@ services:
       - cluster_data:/data
 
   worker-alpha:
+    init: true
     build:
       context: ../..
       dockerfile: deploy/compose/Dockerfile
@@ -34,6 +35,7 @@ services:
       start_period: 1s
 
   worker-beta:
+    init: true
     build:
       context: ../..
       dockerfile: deploy/compose/Dockerfile

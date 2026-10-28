@@ -52,6 +52,7 @@ process.stdout.write(`WORKER_READY status=${readiness.status} pid=${String(proce
 const keepAlive = setInterval(() => undefined, 5_000);
 const shutdown = async (): Promise<void> => {
   clearInterval(keepAlive);
+  setTimeout(() => process.exit(0), 3_000).unref();
   await app.close();
   process.exit(0);
 };
