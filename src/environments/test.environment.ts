@@ -20,6 +20,15 @@ export const environment: AppEnvironment = {
   nodeRole: env("AGBOSS_NODE_ROLE", {
     default: "hybrid",
   }),
+  crashWorkerOnStall: env.flag("AGBOSS_CRASH_WORKER_ON_STALL", {
+    default: false,
+  }),
+  skipStaleWriteAttempt: env.flag("AGBOSS_SKIP_STALE_WRITE_ATTEMPT", {
+    default: false,
+  }),
+  osFreeze: env.flag("AGBOSS_OS_FREEZE", {
+    default: false,
+  }),
   piiPseudonymKey: secret("PII_PSEUDONYM_KEY"),
   openRouterApiKey: secret("OPENROUTER_API_KEY"),
 };

@@ -133,10 +133,12 @@ OPENROUTER_API_KEY="sk-or-v1-..." node dist/src/demo.js --cluster --live --real-
 
 ### 4. Automated Vitest Suite Details
 
-`npm test` executes four test suites mirroring `src/`:
+`npm test` executes six test suites mirroring `src/`:
 - [`tests/tools/inspect-failed-attempt.tool.test.ts`](tests/tools/inspect-failed-attempt.tool.test.ts) — Isolated `@Tool` and `@Action` unit runner verification (`testTool`, `testAction`).
 - [`tests/health-checks/release-cluster.health-check.test.ts`](tests/health-checks/release-cluster.health-check.test.ts) — `checkLiveness()` & `checkReadiness()` verification via `testWith`.
-- [`tests/workflows/module-worker/module-worker.workflow.test.ts`](tests/workflows/module-worker/module-worker.workflow.test.ts) — Same-task takeover (`task-001`), two-layer zombie worker fencing, and direct assertions on AGBoss's `execution_leases`, `checkpoints`, and `child_execution_queue` tables.
+- [`tests/services/protected-write-verifier.service.test.ts`](tests/services/protected-write-verifier.service.test.ts) — Boundary unit tests for `STALE_LEASE_EPOCH` and `LEASE_HOLDER_MISMATCH` rejection evidence, missing non-attempt instrumentation, uncorrelatable checkpoint/artifact tokens, stale on-disk tampering detection, and fabricated rejection contradictions.
+- [`tests/services/release-invariant-verifier.service.test.ts`](tests/services/release-invariant-verifier.service.test.ts) — Verifies `TERMINATED_BEFORE_WRITE` (`exit 137`) classification (`fencingRejectionDemonstrated: false`), `--require-stale-write-rejection` enforcement, and rejection of clean final artifacts when fencing evidence is missing.
+- [`tests/workflows/module-worker/module-worker.workflow.test.ts`](tests/workflows/module-worker/module-worker.workflow.test.ts) — End-to-end coverage of **Case A** (resumed stale worker attempts protected write and is rejected), **Case B** (stale worker remains suspended before reaching the protected-write boundary with zero fabricated rejection events), and **Case C** (valid lease owner performs protected write with no false rejection).
 - [`tests/workflows/release-coordinator/release-coordinator.workflow.test.ts`](tests/workflows/release-coordinator/release-coordinator.workflow.test.ts) — `testWith` saga compensation + `mockLlm(ReleaseRecoveryPlannerAgent)` tool-call proof + full 12-step 8-invariant end-to-end test.
 
 ### 5. Run with Docker Compose or Local Kubernetes (`kind`)
@@ -182,10 +184,64 @@ Every push and pull request runs three independent verification jobs:
 | 4 | `INV-4-SAGA-COMPENSATIONS-RECORDED-AND-APPLIED` | `CompensateReleaseCandidateAction` marked Attempt 1's candidate lock and all 3 module artifacts `COMPENSATED` with its step idempotency key. |
 | 5 | `INV-5-NO-DUPLICATE-EXTERNAL-COMMITS` | Every committed row has a unique step idempotency key and at most one active artifact exists per `(release_id, attempt_number, logical_task_id)`. |
 | 6 | `INV-6-MULTI-INSTANCE-PARTICIPATION` | At least 2 distinct AGBoss worker `instanceId`s executed child workflows across the fixed worker pool. |
-| 7 | `INV-7-ZOMBIE-WORKER-FENCED` | Verifies Layer 1 (`ZOMBIE_WRITE_REJECTED`) and Layer 2 (`RUNTIME_LEASE_FENCED` when zombie resumes, or hard process death) **plus independent verification of AGBoss's `execution_leases` (`lease_epoch >= 2`, `holder_instance_id !== stalledInstanceId`, `released = 1`) and `checkpoints` (strictly linear unbranched `parent_checkpoint_id` chain proving zero split-brain zombie checkpoint writes)**. |
+| 7 | `INV-7-ZOMBIE-WORKER-FENCED` | Explicitly distinguishes **`STALE_WRITE_REJECTED`** (`fencingRejectionDemonstrated: true`, where a resumed stale worker attempted `STAGE_ARTIFACT` and was rejected at the SQLite fencing boundary plus Layer 2 `RUNTIME_LEASE_FENCED`) from **`STALE_WRITE_NOT_ATTEMPTED`** (`fencingRejectionDemonstrated: false`, where the stale worker remained suspended or terminated before reaching the protected-write boundary), while independently verifying on-disk artifact contents, AGBoss `execution_leases` (`lease_epoch >= 2`, `released = 1`), and an unbranched `checkpoints` chain. Fails if evidence is missing, inconsistent, or uncorrelatable—or if `--require-stale-write-rejection` is passed when no stale write was attempted. |
 | 8 | `INV-8-ORIGINAL-LOGICAL-TASK-COMPLETED-AFTER-TAKEOVER` | `rel-2026.10.0:payment-engine` preserved the **exact same `childExecutionId` and `idempotencyKey`**, with Step 1 prepared by Worker A (`leaseEpoch = 1`), Step 2 completed by Worker B (`leaseEpoch = 2`), AGBoss `execution_leases.holder_instance_id` matching the committer, and `0` orphaned rows in `child_execution_queue`. |
 
 > **Internal-Schema Diagnostic Note**: [`ClusterSnapshotRepository`](src/repositories/cluster-snapshot.repository.ts) reads AGBoss's internal SQLite tables (`execution_leases`, `checkpoints`, `child_execution_queue`) directly so `INV-7` and `INV-8` can independently audit lease epochs and checkpoint ancestry. This direct table access is a **verification-only diagnostic dependency** coupled to the internal SQLite schema of `@agboss/core@0.1.0`, **not a recommended application integration API**.
+
+---
+
+## Distinguishing Rejected Stale Writes from Unattempted Writes
+
+Both a stale worker whose protected write was **actively rejected by fencing** and a stale worker that **never reached the protected-write boundary** produce the exact same clean final artifact committed under `leaseEpoch = 2`. However, only the first demonstrates that the fencing mechanism rejected an attempted stale write.
+
+### 1. What the Verification Establishes
+
+[`ProtectedWriteVerifierService`](src/services/protected-write-verifier.service.ts) and [`ReleaseInvariantVerifierService`](src/services/release-invariant-verifier.service.ts) classify protected-write execution from persisted SQLite and filesystem state (never from ambient `process.env` flags or clean final artifacts alone):
+
+- **`STALE_WRITE_REJECTED` (`fencingRejectionDemonstrated: true`)**: The stale worker resumed after losing lease ownership, attempted `STAGE_ARTIFACT` with its captured stale token, was rejected inside the SQLite fencing transaction, and left the replacement owner's on-disk artifact untouched.
+- **`STALE_WRITE_NOT_ATTEMPTED` (`fencingRejectionDemonstrated: false`)**: Pre-write stall instrumentation (`SUSPENDED_BEFORE_WRITE` or `TERMINATED_BEFORE_WRITE`) confirms the stale worker halted before invoking the protected write; takeover succeeded and **no rejection event was fabricated**.
+- **`VALID_OWNER_ACCEPTED` (`fencingRejectionDemonstrated: false`)**: The valid lease owner completed the protected write normally with no lease loss and no false stale-write rejection.
+- **`MISSING_OR_INCONSISTENT_EVIDENCE` (`fencingRejectionDemonstrated: false`)**: Required rejection or pre-write stall evidence is absent, contradictory, or cannot be correlated with checkpoints and on-disk artifacts. A clean final artifact alone always fails verification under takeover (`INV-7: FAILED`).
+
+### 2. Reproducing Both Stale-Worker Scenarios
+
+```bash
+npm run build
+
+# Scenario A — Stale worker resumes and attempts the protected write (rejected by fence):
+node dist/src/demo.js --cluster
+node dist/src/demo.js --verify-only --require-stale-write-rejection
+# -> protectedWriteVerification.outcome === "STALE_WRITE_REJECTED"
+# -> protectedWriteVerification.fencingRejectionDemonstrated === true
+# (Add --real-clock to run with real 30s lease expiry and POSIX SIGSTOP/SIGCONT.)
+
+# Scenario B1 — Stale worker remains suspended and never attempts the protected write:
+node dist/src/demo.js --cluster --no-stale-write-attempt
+node dist/src/demo.js --verify-only
+# -> protectedWriteVerification.outcome === "STALE_WRITE_NOT_ATTEMPTED"
+# -> protectedWriteVerification.fencingRejectionDemonstrated === false
+# -> nonAttemptDisposition === "SUSPENDED_BEFORE_WRITE"
+# Running with --require-stale-write-rejection exits with code 1 because no stale write was rejected.
+
+# Scenario B2 — Stale worker terminates (exit 137) before reaching the protected-write boundary:
+AGBOSS_CRASH_WORKER_ON_STALL=true node dist/src/demo.js --cluster
+node dist/src/demo.js --verify-only
+# -> protectedWriteVerification.outcome === "STALE_WRITE_NOT_ATTEMPTED"
+# -> protectedWriteVerification.fencingRejectionDemonstrated === false
+# -> nonAttemptDisposition === "TERMINATED_BEFORE_WRITE"
+```
+
+### 3. How the Verifier Correlates Attempts, Rejection Evidence, Checkpoints, and Final Artifacts
+
+1. **Enforcement-Boundary Recording**: Inside [`LeaseFencingService.checkAndAdvanceFence()`](src/services/lease-fencing.service.ts) (`BEGIN IMMEDIATE` SQLite transaction), any write whose `capturedToken` (`{ holderInstanceId, leaseEpoch }`) fails monotonic validation against the active `observedToken` (`execution_leases` / `fencing_tokens`) atomically appends `ZOMBIE_WRITE_REJECTED` with `attemptedOperation` (`"STAGE_ARTIFACT"`), `targetArtifactId`, `targetStagingArtifactPath`, `candidateDigest`, `workerInstanceId`, `executionId`, `logicalTaskId`, `idempotencyKey`, `rejectionReason` (`"STALE_LEASE_EPOCH"` or `"LEASE_HOLDER_MISMATCH"`), and `capturedCheckpointId` / `observedHeadCheckpointId` / `checkpointThreadId`. [`ReleaseLedgerService.stageModuleArtifact()`](src/services/release-ledger.service.ts) writes the `.artifact.json` file to disk **only after** this fencing transaction commits.
+2. **Checkpoint & Ownership Correlation**: [`ProtectedWriteEvidenceService`](src/services/protected-write-evidence.service.ts) verifies that `capturedCheckpointId` and `observedHeadCheckpointId` exist in the child execution's unbranched `checkpoints` chain, that `capturedCheckpointId` matches the Step 1 checkpoint from which the replacement worker resumed, and that `observedToken` matches the committed owner in `release_artifacts`, `fencing_tokens`, and `execution_leases`.
+3. **On-Disk Protected Artifact Verification**: Rather than checking file existence alone, the verifier parses the JSON payloads of `.artifact.json`, `.manifest.json`, and `release-manifest.json` on disk and verifies `artifactId`, `committedByInstanceId`, `leaseEpoch`, `idempotencyKey`, and `candidateDigest` match the valid replacement owner.
+
+### 4. What This Experiment Does Not Establish
+
+- **Protected Shared-Storage Fencing vs. Arbitrary External Side Effects**: Monotonic `leaseEpoch` fencing prevents stale writes on the **protected shared-storage path** because the target SQLite ledger atomically checks `(holderInstanceId, leaseEpoch)` and `step.idempotencyKey` before committing state and writing artifact files. This experiment does **not** establish "exactly-once" behavior for arbitrary uncooperative external side effects (such as third-party REST APIs, emails, payment gateways, or unguarded filesystem writes that do not enforce monotonic fencing tokens).
+- **No Uninstrumented Non-Attempt Inference**: A missing `ZOMBIE_WRITE_REJECTED` event does not prove no write was attempted unless the experiment's pre-write stall instrumentation (`SUSPENDED_BEFORE_WRITE` or `TERMINATED_BEFORE_WRITE`) explicitly recorded that execution halted prior to the protected-write call.
 
 ---
 

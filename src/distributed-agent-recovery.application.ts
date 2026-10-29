@@ -24,6 +24,8 @@ import { LedgerEventRepository } from "./repositories/ledger-event.repository.js
 import { ReleaseArtifactRepository } from "./repositories/release-artifact.repository.js";
 import { ReleaseCandidateRepository } from "./repositories/release-candidate.repository.js";
 import { LeaseFencingService } from "./services/lease-fencing.service.js";
+import { ProtectedWriteEvidenceService } from "./services/protected-write-evidence.service.js";
+import { ProtectedWriteVerifierService } from "./services/protected-write-verifier.service.js";
 import { ReleaseArtifactStoreService } from "./services/release-artifact-store.service.js";
 import { ReleaseCandidateService } from "./services/release-candidate.service.js";
 import { ReleaseCompensationService } from "./services/release-compensation.service.js";
@@ -65,6 +67,8 @@ import { ReleaseRecoveryPlannedWorkflowFinish } from "./workflows/release-coordi
     ReleaseLedgerService,
     ReleaseCandidateService,
     ReleaseCompensationService,
+    ProtectedWriteEvidenceService,
+    ProtectedWriteVerifierService,
     ReleaseInvariantVerifierService,
     StorageProbeService,
     SqliteCheckpointSaver,

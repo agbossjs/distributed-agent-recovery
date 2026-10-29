@@ -24,6 +24,7 @@ export interface ReleasePipelineOptions {
   readonly externalWorkers?: boolean;
   readonly spawnClusterWorkers?: boolean;
   readonly realClock?: boolean;
+  readonly staleWorkerAttemptsWrite?: boolean;
   readonly releaseId?: string;
   readonly version?: string;
 }
@@ -81,6 +82,9 @@ export async function runReleaseRecoveryPipeline(
   const useExternal = options.externalWorkers === true || options.spawnClusterWorkers === true;
   const realClock = options.realClock === true || process.env["AGBOSS_REAL_CLOCK"] === "true";
   const osFreeze = realClock && useExternal && process.env["AGBOSS_OS_FREEZE"] !== "false";
+  const skipStaleWriteAttempt =
+    options.staleWorkerAttemptsWrite === false ||
+    process.env["AGBOSS_SKIP_STALE_WRITE_ATTEMPT"] === "true";
 
   const buildEnv = (nodeRole: string): NodeJS.ProcessEnv => ({
     ...process.env,
@@ -92,6 +96,7 @@ export async function runReleaseRecoveryPipeline(
     ...(isLive ? { AGBOSS_LIVE_DEMO: "true" } : {}),
     ...(realClock ? { AGBOSS_REAL_CLOCK: "true" } : { AGBOSS_FAST_SWEEP: "true" }),
     ...(osFreeze ? { AGBOSS_OS_FREEZE: "true" } : {}),
+    ...(skipStaleWriteAttempt ? { AGBOSS_SKIP_STALE_WRITE_ATTEMPT: "true" } : {}),
   });
 
   const createNode = (role: string) =>
@@ -118,13 +123,10 @@ export async function runReleaseRecoveryPipeline(
     const attempt1Result = await coordinator.execute(
       ReleaseCoordinatorWorkflowStart,
       {
-        releaseId,
-        version,
-        attemptNumber: 1,
+        releaseId, version, attemptNumber: 1,
         modules: "auth-service,payment-engine,telemetry-collector",
         buildFlags: "--opt-level=3 --deterministic",
-        simulateIntegrationFailure: true,
-        stallTargetModule: "",
+        simulateIntegrationFailure: true, stallTargetModule: "",
       },
       { record: true },
     );

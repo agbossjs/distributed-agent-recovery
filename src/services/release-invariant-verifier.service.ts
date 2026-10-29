@@ -2,14 +2,18 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { Injectable } from "@agboss/core";
 import { ReleaseArtifactRepository } from "../repositories/release-artifact.repository.js";
-import type { LedgerArtifactRow, LedgerSnapshot } from "../schemas/release-ledger.schema.js";
+import type {
+  LedgerArtifactRow, LedgerSnapshot, ProtectedWriteVerificationSummary, TaskProtectedWriteVerification,
+} from "../schemas/release-ledger.schema.js";
+import { ProtectedWriteVerifierService } from "./protected-write-verifier.service.js";
 
 export interface InvariantCheckResult {
-  readonly id: string;
-  readonly number: number;
-  readonly description: string;
-  readonly status: "VERIFIED" | "FAILED";
-  readonly evidence: Readonly<Record<string, unknown>>;
+  readonly id: string; readonly number: number; readonly description: string;
+  readonly status: "VERIFIED" | "FAILED"; readonly evidence: Readonly<Record<string, unknown>>;
+}
+
+export interface InvariantVerificationOptions {
+  readonly expectLeaseTakeover?: boolean; readonly requireStaleWriteRejection?: boolean; readonly targetAttemptNumber?: number;
 }
 
 export interface InvariantVerificationReport {
@@ -17,6 +21,7 @@ export interface InvariantVerificationReport {
   readonly sqlitePath: string;
   readonly artifactDir: string;
   readonly allVerified: boolean;
+  readonly protectedWriteVerification: ProtectedWriteVerificationSummary;
   readonly checks: readonly InvariantCheckResult[];
 }
 
@@ -24,47 +29,41 @@ const DEFAULT_MODULES = ["auth-service", "payment-engine", "telemetry-collector"
 
 @Injectable()
 export class ReleaseInvariantVerifierService {
-  static async verifyFromFile(params: {
-    readonly sqlitePath: string;
-    readonly artifactDir: string;
-    readonly releaseId?: string;
-    readonly expectedModules?: readonly string[];
+  static async verifyFromFile(params: InvariantVerificationOptions & {
+    readonly sqlitePath: string; readonly artifactDir: string;
+    readonly releaseId?: string; readonly expectedModules?: readonly string[];
   }): Promise<InvariantVerificationReport> {
     const releaseId = params.releaseId ?? "rel-2026.10.0";
     const expected = [...(params.expectedModules ?? DEFAULT_MODULES)].sort();
-    if (!existsSync(params.sqlitePath)) {
-      throw new Error(`SQLite database not found at ${params.sqlitePath}`);
-    }
+    if (!existsSync(params.sqlitePath)) throw new Error(`SQLite database not found at ${params.sqlitePath}`);
     const snap = await ReleaseArtifactRepository.readSnapshotFromFile({
-      sqlitePath: params.sqlitePath,
-      artifactDir: params.artifactDir,
-      releaseId,
+      sqlitePath: params.sqlitePath, artifactDir: params.artifactDir, releaseId,
     });
-    return ReleaseInvariantVerifierService.verifySnapshot(snap, releaseId, expected);
+    return ReleaseInvariantVerifierService.verifySnapshot(snap, releaseId, expected, params);
   }
 
   static verifySnapshot(
-    snap: LedgerSnapshot,
-    releaseId: string,
-    expected: readonly string[],
+    snap: LedgerSnapshot, releaseId: string, expected: readonly string[], options: InvariantVerificationOptions = {},
   ): InvariantVerificationReport {
-    const promoted = snap.artifacts.filter((a) => a.attemptNumber === 2 && a.status === "PROMOTED");
+    const targetAttempt = options.targetAttemptNumber ?? 2;
+    const promoted = snap.artifacts.filter((a) => a.attemptNumber === targetAttempt && a.status === "PROMOTED");
     const attempt1 = snap.artifacts.filter((a) => a.attemptNumber === 1);
+    const pwSummary = ProtectedWriteVerifierService.verifyAttempt(snap, {
+      releaseId, attemptNumber: targetAttempt, expectedModules: expected,
+    });
     const checks: InvariantCheckResult[] = [
       checkModulesCompleted(promoted, expected),
-      checkFinalArtifactsExist(snap, promoted, expected),
-      checkNoFailedAttemptActive(snap.artifactDir, releaseId, attempt1, expected),
-      checkSagaCompensations(snap, attempt1, expected),
+      checkFinalArtifactsExist(snap, promoted, expected, targetAttempt),
+      checkNoFailedAttemptActive(snap.artifactDir, releaseId, attempt1, expected, targetAttempt),
+      checkSagaCompensations(snap, attempt1, expected, targetAttempt),
       checkNoDuplicateCommits(snap.artifacts, promoted, expected),
       checkMultiInstanceParticipation(snap.artifacts),
-      ...checkZombieFencingAndTakeover(snap, promoted),
+      ...checkZombieFencingAndTakeover(pwSummary, options),
     ];
     return {
-      releaseId,
-      sqlitePath: snap.sqlitePath,
-      artifactDir: snap.artifactDir,
+      releaseId, sqlitePath: snap.sqlitePath, artifactDir: snap.artifactDir,
       allVerified: checks.every((c) => c.status === "VERIFIED"),
-      checks,
+      protectedWriteVerification: pwSummary, checks,
     };
   }
 }
@@ -82,14 +81,13 @@ function checkModulesCompleted(promoted: readonly LedgerArtifactRow[], expected:
 }
 
 function checkFinalArtifactsExist(
-  snap: LedgerSnapshot, promoted: readonly LedgerArtifactRow[], expected: readonly string[],
+  snap: LedgerSnapshot, promoted: readonly LedgerArtifactRow[], expected: readonly string[], targetAttempt: number,
 ): InvariantCheckResult {
-  const manifestPath = snap.candidateLocks.find((l) => l.attemptNumber === 2)?.manifestPath ?? null;
+  const manifestPath = snap.candidateLocks.find((l) => l.attemptNumber === targetAttempt)?.manifestPath ?? null;
   const manifestExists = manifestPath !== null && existsSync(manifestPath);
-  const manifestCount =
-    manifestExists && manifestPath !== null
-      ? ((JSON.parse(readFileSync(manifestPath, "utf8")) as { modules?: unknown[] }).modules?.length ?? 0)
-      : 0;
+  const manifestCount = manifestExists && manifestPath !== null
+    ? ((JSON.parse(readFileSync(manifestPath, "utf8")) as { modules?: unknown[] }).modules?.length ?? 0)
+    : 0;
   const filesExist = promoted.length === expected.length && promoted.every((a) => existsSync(a.artifactPath));
   return check(2, "INV-2-FINAL-ARTIFACTS-EXIST", "Required final artifacts exist", manifestExists && manifestCount === expected.length && filesExist, {
     releaseManifestPath: manifestPath, manifestCount,
@@ -97,8 +95,9 @@ function checkFinalArtifactsExist(
 }
 
 function checkNoFailedAttemptActive(
-  artifactDir: string, releaseId: string, attempt1: readonly LedgerArtifactRow[], expected: readonly string[],
+  artifactDir: string, releaseId: string, attempt1: readonly LedgerArtifactRow[], expected: readonly string[], targetAttempt: number,
 ): InvariantCheckResult {
+  if (targetAttempt === 1) return check(3, "INV-3-NO-FAILED-ATTEMPT-ARTIFACTS-ACTIVE", "Single-attempt run has no prior failed attempt artifacts", true, { singleAttemptRun: true });
   const activeDb = attempt1.filter((a) => a.status === "STAGED" || a.status === "PROMOTED");
   const stagingDir = resolve(artifactDir, "staging", releaseId, "attempt-1");
   const remainingFiles = expected.filter((m) => existsSync(resolve(stagingDir, `${m}.artifact.json`)));
@@ -109,8 +108,9 @@ function checkNoFailedAttemptActive(
 }
 
 function checkSagaCompensations(
-  snap: LedgerSnapshot, attempt1: readonly LedgerArtifactRow[], expected: readonly string[],
+  snap: LedgerSnapshot, attempt1: readonly LedgerArtifactRow[], expected: readonly string[], targetAttempt: number,
 ): InvariantCheckResult {
+  if (targetAttempt === 1) return check(4, "INV-4-SAGA-COMPENSATIONS-RECORDED-AND-APPLIED", "Single-attempt run required no prior saga compensation", true, { singleAttemptRun: true });
   const lock1 = snap.candidateLocks.find((l) => l.attemptNumber === 1);
   const compArts = attempt1.filter((a) => a.status === "COMPENSATED" && a.compensatedByKey !== null);
   const compEvents = snap.events.filter((e) => e.attemptNumber === 1 && e.outcome === "COMPENSATED");
@@ -124,11 +124,9 @@ function checkNoDuplicateCommits(
   all: readonly LedgerArtifactRow[], promoted: readonly LedgerArtifactRow[], expected: readonly string[],
 ): InvariantCheckResult {
   const activeCounts = new Map<string, number>();
-  for (const a of all) {
-    if (a.status === "STAGED" || a.status === "PROMOTED") {
-      const k = `a${String(a.attemptNumber)}:${a.logicalTaskId}`;
-      activeCounts.set(k, (activeCounts.get(k) ?? 0) + 1);
-    }
+  for (const a of all.filter((r) => r.status === "STAGED" || r.status === "PROMOTED")) {
+    const k = `a${String(a.attemptNumber)}:${a.logicalTaskId}`;
+    activeCounts.set(k, (activeCounts.get(k) ?? 0) + 1);
   }
   const dupes = [...activeCounts.entries()].filter(([, cnt]) => cnt > 1);
   const uniqueKeys = new Set(all.map((a) => a.idempotencyKey));
@@ -146,44 +144,50 @@ function checkMultiInstanceParticipation(all: readonly LedgerArtifactRow[]): Inv
 }
 
 function checkZombieFencingAndTakeover(
-  snap: LedgerSnapshot, promoted: readonly LedgerArtifactRow[],
+  pw: ProtectedWriteVerificationSummary, options: InvariantVerificationOptions,
 ): readonly [InvariantCheckResult, InvariantCheckResult] {
-  const stall = snap.events.find((e) => e.operation === "WORKER_STALLED_LEASE_EXPIRED");
-  const zombieRej = snap.events.find((e) => e.operation === "ZOMBIE_WRITE_REJECTED");
-  const runtimeFence = snap.events.find((e) => e.operation === "RUNTIME_LEASE_FENCED");
-  const takeover = snap.events.find((e) => e.operation === "LEASE_TAKEOVER_COMPLETED");
-
-  const agbossLease = snap.executionLeases.find((l) => l.rootExecutionId === stall?.executionId);
-  const childCps = stall === undefined ? [] : snap.checkpoints.filter(
-    (c) => c.threadId === stall.executionId || c.threadId.endsWith(`/child/${stall.executionId}`),
-  );
-  const linearCpChain = childCps.length >= 4 && new Set(childCps.map((c) => c.parentCheckpointId ?? "__root__")).size === childCps.length;
-  const leaseFenced = agbossLease !== undefined && agbossLease.leaseEpoch >= 2 && agbossLease.holderInstanceId !== stall?.instanceId && agbossLease.released === 1;
-  const orphanedQueue = snap.childQueue.filter((q) => q.executionId === stall?.executionId && q.status !== "finished");
-
-  const expectHardCrash = process.env["AGBOSS_CRASH_WORKER_ON_STALL"] === "true";
-  const zombieFenced = expectHardCrash
-    ? zombieRej === undefined
-    : zombieRej !== undefined && runtimeFence !== undefined && stall?.instanceId === zombieRej.instanceId;
-  const inv7Ok = stall !== undefined && stall.leaseEpoch === 1 && zombieFenced && leaseFenced && linearCpChain;
-  const rec = promoted.find((a) => a.logicalTaskId === stall?.logicalTaskId);
-  const inv8Ok = stall !== undefined && takeover !== undefined && rec !== undefined &&
-    rec.executionId === stall.executionId && rec.preparedByInstanceId === stall.instanceId &&
-    rec.committedByInstanceId !== rec.preparedByInstanceId && rec.leaseEpoch >= 2 &&
-    agbossLease?.holderInstanceId === rec.committedByInstanceId && agbossLease.leaseEpoch === rec.leaseEpoch && orphanedQueue.length === 0;
-
+  const expectTakeover = options.expectLeaseTakeover !== false;
+  const requireRejection = options.requireStaleWriteRejection === true;
+  const focal: TaskProtectedWriteVerification | undefined =
+    pw.tasks.find((t) => t.outcome === "MISSING_OR_INCONSISTENT_EVIDENCE") ??
+    pw.tasks.find((t) => t.outcome === "STALE_WRITE_REJECTED") ??
+    pw.tasks.find((t) => t.outcome !== "VALID_OWNER_ACCEPTED") ?? pw.tasks[0];
+  const inv7Ok =
+    pw.outcome === "STALE_WRITE_REJECTED" ||
+    (pw.outcome === "STALE_WRITE_NOT_ATTEMPTED" && !requireRejection) ||
+    (pw.outcome === "VALID_OWNER_ACCEPTED" && !expectTakeover && !requireRejection);
+  const inv7Desc =
+    pw.outcome === "STALE_WRITE_REJECTED"
+      ? "Stale worker attempted protected write after lease loss and was explicitly rejected at both external ledger and AGBoss LeasedCheckpointSaver boundaries"
+      : pw.outcome === "STALE_WRITE_NOT_ATTEMPTED"
+        ? "Stale worker never reached the protected-write boundary after lease loss; takeover succeeded with no fabricated rejection event (fencing rejection not demonstrated)"
+        : pw.outcome === "VALID_OWNER_ACCEPTED"
+          ? "Valid lease owners completed all protected writes with no lease loss and no false stale-write rejection"
+          : "Protected-write fencing evidence is missing, inconsistent, or cannot be correlated with checkpoints and final artifacts";
+  const inv8Ok =
+    pw.inconsistentTaskCount === 0 &&
+    (expectTakeover
+      ? focal !== undefined && (focal.outcome === "STALE_WRITE_REJECTED" || focal.outcome === "STALE_WRITE_NOT_ATTEMPTED")
+      : pw.outcome === "VALID_OWNER_ACCEPTED");
   return [
-    check(7, "INV-7-ZOMBIE-WORKER-FENCED", "Zombie worker fenced at both external ledger and AGBoss LeasedCheckpointSaver/execution_leases tables", inv7Ok, {
-      stalledInstanceId: stall?.instanceId ?? null, executionId: stall?.executionId ?? null,
-      agbossExecutionLeaseEpoch: agbossLease?.leaseEpoch ?? null, agbossExecutionLeaseHolder: agbossLease?.holderInstanceId ?? null,
-      agbossExecutionLeaseReleased: agbossLease?.released ?? null, agbossCheckpointCount: childCps.length,
-      agbossLinearCheckpointChainNoZombieFork: linearCpChain,
+    check(7, "INV-7-ZOMBIE-WORKER-FENCED", inv7Desc, inv7Ok, {
+      protectedWriteOutcome: pw.outcome, fencingRejectionDemonstrated: pw.fencingRejectionDemonstrated,
+      nonAttemptDisposition: focal?.nonAttemptDisposition ?? null, stalledInstanceId: focal?.preparedByInstanceId ?? null,
+      executionId: focal?.executionId ?? null, attemptedOperation: focal?.rejectionEvidence?.attemptedOperation ?? null,
+      rejectionReason: focal?.rejectionEvidence?.rejectionReason ?? null, capturedToken: focal?.rejectionEvidence?.capturedToken ?? null,
+      observedToken: focal?.rejectionEvidence?.observedToken ?? null, capturedCheckpointId: focal?.rejectionEvidence?.capturedCheckpointId ?? null,
+      targetArtifactId: focal?.rejectionEvidence?.targetArtifactId ?? focal?.artifactId ?? null,
+      protectedArtifactVerifiedOnDisk: focal?.protectedArtifactVerifiedOnDisk ?? false,
+      agbossExecutionLeaseEpoch: focal?.agbossExecutionLeaseEpoch ?? null, agbossExecutionLeaseHolder: focal?.agbossExecutionLeaseHolder ?? null,
+      agbossExecutionLeaseReleased: focal?.agbossExecutionLeaseReleased ?? null, agbossCheckpointCount: focal?.checkpointCount ?? 0,
+      agbossLinearCheckpointChainNoZombieFork: focal?.linearCheckpointChain ?? false, issues: focal?.issues ?? [],
     }),
     check(8, "INV-8-ORIGINAL-LOGICAL-TASK-COMPLETED-AFTER-TAKEOVER", "Original child execution recovered on replacement instance and verified in AGBoss execution_leases & child_execution_queue", inv8Ok, {
-      logicalTaskId: stall?.logicalTaskId ?? null, preservedExecutionId: rec?.executionId ?? null,
-      preparedBy: rec?.preparedByInstanceId ?? null, takenOverBy: rec?.committedByInstanceId ?? null,
-      committedLeaseEpoch: rec?.leaseEpoch ?? null, agbossLeaseHolderMatchesCommitter: agbossLease?.holderInstanceId === rec?.committedByInstanceId,
-      orphanedChildQueueRows: orphanedQueue.length,
+      logicalTaskId: focal?.logicalTaskId ?? null, preservedExecutionId: focal?.executionId ?? null,
+      preparedBy: focal?.preparedByInstanceId ?? null, takenOverBy: focal?.committedByInstanceId ?? null,
+      committedLeaseEpoch: focal?.committedLeaseEpoch ?? null,
+      agbossLeaseHolderMatchesCommitter: focal !== undefined && focal.agbossExecutionLeaseHolder === focal.committedByInstanceId,
+      orphanedChildQueueRows: focal?.orphanedChildQueueRows ?? 0,
     }),
   ];
 }

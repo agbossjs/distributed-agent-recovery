@@ -8,6 +8,9 @@ export class AppEnvironment {
   sqlitePath!: string;
   artifactDir!: string;
   nodeRole!: string;
+  crashWorkerOnStall!: boolean;
+  skipStaleWriteAttempt!: boolean;
+  osFreeze!: boolean;
   piiPseudonymKey?: Secret;
   openRouterApiKey!: Secret;
 }

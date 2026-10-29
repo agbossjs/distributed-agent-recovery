@@ -23,6 +23,20 @@ export class ReleaseArtifactStoreService {
     return env.artifactDir ?? join(process.cwd(), ".data/dev/artifacts");
   }
 
+  resolveStagedArtifactPath(params: {
+    readonly releaseId: string;
+    readonly attemptNumber: number;
+    readonly moduleName: string;
+  }): string {
+    return join(
+      this.artifactDir(),
+      "staging",
+      params.releaseId,
+      `attempt-${String(params.attemptNumber)}`,
+      `${params.moduleName}.artifact.json`,
+    );
+  }
+
   writeStagedArtifact(params: {
     readonly artifactId: string;
     readonly releaseId: string;
@@ -38,13 +52,7 @@ export class ReleaseArtifactStoreService {
     readonly candidateDigest: string;
     readonly stagedAtMs: number;
   }): string {
-    const artifactPath = join(
-      this.artifactDir(),
-      "staging",
-      params.releaseId,
-      `attempt-${String(params.attemptNumber)}`,
-      `${params.moduleName}.artifact.json`,
-    );
+    const artifactPath = this.resolveStagedArtifactPath(params);
     mkdirSync(dirname(artifactPath), { recursive: true });
     writeFileSync(
       artifactPath,
