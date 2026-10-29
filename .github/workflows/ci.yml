@@ -41,15 +41,28 @@ jobs:
       - name: Run unit & workflow tests (including independent AGBoss lease/checkpoint table assertions)
         run: npm test
 
-      - name: Run fast multi-process cluster showcase & 8-invariant verifier
+      - name: Run fast multi-process cluster showcase & verify rejected vs unattempted stale writes
         run: |
           node dist/src/demo.js --cluster
-          node dist/src/demo.js --verify-only
+          node dist/src/demo.js --verify-only --require-stale-write-rejection
+          node dist/src/demo.js --cluster --no-stale-write-attempt > /tmp/no-attempt-report.json
+          node dist/src/demo.js --verify-only > /tmp/no-attempt-verify.json
+          node -e '
+            const fs = require("node:fs");
+            const v = JSON.parse(fs.readFileSync("/tmp/no-attempt-verify.json", "utf8"));
+            if (
+              !v.allVerified ||
+              v.protectedWriteVerification.outcome !== "STALE_WRITE_NOT_ATTEMPTED" ||
+              v.protectedWriteVerification.fencingRejectionDemonstrated !== false
+            ) {
+              throw new Error("Unattempted stale-write classification failed: " + JSON.stringify(v, null, 2));
+            }
+          '
 
       - name: Run real-clock (30s lease TTL + POSIX SIGSTOP/SIGCONT) multi-process zombie recovery gate
         run: |
           AGBOSS_LOG_WORKERS=true node dist/src/demo.js --cluster --real-clock > /tmp/real-clock-report.json
-          node dist/src/demo.js --verify-only > /tmp/real-clock-verify.json
+          node dist/src/demo.js --verify-only --require-stale-write-rejection > /tmp/real-clock-verify.json
           node -e '
             const fs = require("node:fs");
             const r = JSON.parse(fs.readFileSync("/tmp/real-clock-report.json", "utf8"));
@@ -57,11 +70,13 @@ jobs:
               r.clockMode !== "real-30s-clock" ||
               r.faultMode !== "os-sigstop-natural-lease-expiry" ||
               r.workerTopology !== "multi-process" ||
-              !r.invariants.allVerified
+              !r.invariants.allVerified ||
+              r.invariants.protectedWriteVerification.outcome !== "STALE_WRITE_REJECTED" ||
+              r.invariants.protectedWriteVerification.fencingRejectionDemonstrated !== true
             ) {
               throw new Error("Real-clock verification failed: " + JSON.stringify(r.invariants, null, 2));
             }
-            console.log("Verified real-clock POSIX SIGSTOP takeover across worker PIDs:", r.workerPids);
+            console.log("Verified real-clock POSIX SIGSTOP takeover & stale-write rejection across worker PIDs:", r.workerPids);
           '
 
       - name: Upload real-clock multi-process zombie recovery evidence
@@ -94,17 +109,23 @@ jobs:
               throw new Error("Missing JSON report in demo:compose output:\n" + raw);
             }
             const r = JSON.parse(raw.slice(start, end + 1));
-            if (!r.invariants || !r.invariants.allVerified || r.invariants.checks.length !== 8) {
+            if (
+              !r.invariants ||
+              !r.invariants.allVerified ||
+              r.invariants.checks.length !== 8 ||
+              r.invariants.protectedWriteVerification.outcome !== "STALE_WRITE_REJECTED" ||
+              r.invariants.protectedWriteVerification.fencingRejectionDemonstrated !== true
+            ) {
               throw new Error("Docker Compose invariant verification failed: " + JSON.stringify(r.invariants, null, 2));
             }
-            console.log("Docker Compose (npm run demo:compose) 8/8 invariants VERIFIED");
+            console.log("Docker Compose (npm run demo:compose) 8/8 invariants + STALE_WRITE_REJECTED VERIFIED");
           '
 
       - name: Verify hard worker container death (exit 137) mid-step recovers on surviving worker without hang or corruption
         run: |
           AGBOSS_CRASH_WORKER_ON_STALL=true docker compose -f deploy/compose/docker-compose.yml up -d --wait worker-alpha worker-beta
           AGBOSS_CRASH_WORKER_ON_STALL=true docker compose -f deploy/compose/docker-compose.yml run --rm -T --no-deps coordinator node dist/src/demo.js > /tmp/compose-crash-run.log
-          AGBOSS_CRASH_WORKER_ON_STALL=true docker compose -f deploy/compose/docker-compose.yml run --rm -T --no-deps coordinator node dist/src/demo.js --verify-only > /tmp/compose-crash-verify.log
+          docker compose -f deploy/compose/docker-compose.yml run --rm -T --no-deps coordinator node dist/src/demo.js --verify-only > /tmp/compose-crash-verify.log
           docker compose -f deploy/compose/docker-compose.yml ps -a
           node -e '
             const fs = require("node:fs");
@@ -115,10 +136,15 @@ jobs:
               throw new Error("Missing JSON report in crash verify output:\n" + raw);
             }
             const v = JSON.parse(raw.slice(start, end + 1));
-            if (!v.allVerified || v.checks.length !== 8) {
+            if (
+              !v.allVerified ||
+              v.checks.length !== 8 ||
+              v.protectedWriteVerification.outcome !== "STALE_WRITE_NOT_ATTEMPTED" ||
+              v.protectedWriteVerification.fencingRejectionDemonstrated !== false
+            ) {
               throw new Error("Worker-crash failover verification failed: " + JSON.stringify(v, null, 2));
             }
-            console.log("Docker Compose hard worker-crash (exit 137) failover 8/8 invariants VERIFIED");
+            console.log("Docker Compose hard worker-crash (exit 137) failover 8/8 invariants + STALE_WRITE_NOT_ATTEMPTED VERIFIED");
           '
 
       - name: Tear down Docker Compose containers and volumes
@@ -159,8 +185,14 @@ jobs:
               throw new Error("Missing JSON report in Kubernetes coordinator logs:\n" + raw);
             }
             const r = JSON.parse(raw.slice(start, end + 1));
-            if (!r.invariants || !r.invariants.allVerified || r.invariants.checks.length !== 8) {
+            if (
+              !r.invariants ||
+              !r.invariants.allVerified ||
+              r.invariants.checks.length !== 8 ||
+              r.invariants.protectedWriteVerification.outcome !== "STALE_WRITE_REJECTED" ||
+              r.invariants.protectedWriteVerification.fencingRejectionDemonstrated !== true
+            ) {
               throw new Error("Kubernetes kind invariant check failed: " + JSON.stringify(r, null, 2));
             }
-            console.log("Kubernetes (kind) 2-pod worker Deployment + coordinator Job 8/8 invariants VERIFIED");
+            console.log("Kubernetes (kind) 2-pod worker Deployment + coordinator Job 8/8 invariants + STALE_WRITE_REJECTED VERIFIED");
           '

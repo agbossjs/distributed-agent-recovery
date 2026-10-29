@@ -109,6 +109,10 @@ describe("ReleaseCoordinatorWorkflow", () => {
       });
       expect(invariants.allVerified).toBe(true);
       expect(invariants.checks).toHaveLength(8);
+      expect(invariants.protectedWriteVerification.outcome).toBe("STALE_WRITE_REJECTED");
+      expect(invariants.protectedWriteVerification.fencingRejectionDemonstrated).toBe(true);
+      expect(invariants.protectedWriteVerification.rejectedStaleWriteCount).toBe(1);
+      expect(invariants.protectedWriteVerification.validOwnerAcceptedCount).toBe(2);
     } finally {
       rmSync(workDir, { recursive: true, force: true });
     }

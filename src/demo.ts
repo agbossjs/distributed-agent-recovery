@@ -5,6 +5,10 @@ import { runReleaseRecoveryPipeline } from "../scenarios/release-recovery-pipeli
 import { ReleaseInvariantVerifierService } from "./services/release-invariant-verifier.service.js";
 
 const verifyOnly = process.argv.includes("--verify-only");
+const requireStaleWriteRejection = process.argv.includes("--require-stale-write-rejection");
+const noStaleWriteAttempt =
+  process.argv.includes("--no-stale-write-attempt") ||
+  process.env["AGBOSS_SKIP_STALE_WRITE_ATTEMPT"] === "true";
 const spawnClusterWorkers = process.argv.includes("--cluster");
 const realClock =
   process.argv.includes("--real-clock") || process.env["AGBOSS_REAL_CLOCK"] === "true";
@@ -23,6 +27,7 @@ if (verifyOnly) {
     sqlitePath,
     artifactDir,
     releaseId,
+    requireStaleWriteRejection,
   });
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   if (!report.allVerified) {
@@ -46,6 +51,7 @@ if (verifyOnly) {
     externalWorkers,
     spawnClusterWorkers,
     realClock,
+    staleWorkerAttemptsWrite: !noStaleWriteAttempt,
     releaseId,
     version: "2.4.0",
   });
@@ -54,6 +60,7 @@ if (verifyOnly) {
     sqlitePath,
     artifactDir,
     releaseId,
+    requireStaleWriteRejection,
   });
 
   if (!invariants.allVerified) {

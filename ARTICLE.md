@@ -171,38 +171,44 @@ In distributed systems, overclaiming is as dangerous as under-engineering. A cle
 
 AGBoss's runtime `LeaseFence` validates and renews leases whenever a step finishes and writes its checkpoint (`LeasedCheckpointSaver.putWrites`). However, an `@Action` performs external I/O *inside* its `execute()` method—**before** returning control to LangGraph's checkpoint saver.
 
-Therefore, [`StageModuleArtifactAction`](https://github.com/agbossjs/distributed-agent-recovery/blob/main/src/actions/stage-module-artifact.action.ts) captures the worker's active `(instanceId, leaseEpoch)` at step entry and passes it as a monotonic fencing token into [`LeaseFencingService.checkAndAdvanceFence()`](https://github.com/agbossjs/distributed-agent-recovery/blob/main/src/services/lease-fencing.service.ts):
+Therefore, [`StageModuleArtifactAction`](https://github.com/agbossjs/distributed-agent-recovery/blob/main/src/actions/stage-module-artifact.action.ts) captures the worker's active `(instanceId, leaseEpoch)` and Step 1 `capturedCheckpointId` at step entry and passes them into [`LeaseFencingService.checkAndAdvanceFence()`](https://github.com/agbossjs/distributed-agent-recovery/blob/main/src/services/lease-fencing.service.ts)—and [`ReleaseLedgerService.stageModuleArtifact()`](https://github.com/agbossjs/distributed-agent-recovery/blob/main/src/services/release-ledger.service.ts) writes the staged `.artifact.json` file to disk **only after** the atomic SQLite fencing transaction commits:
 
 ```typescript
-if (
-  params.capturedLeaseEpoch < activeLeaseEpoch ||
-  (activeHolder !== params.capturedInstanceId &&
-    params.capturedLeaseEpoch <= activeLeaseEpoch)
-) {
-  await this.appendEvent(
-    {
-      ...params,
-      operation: "ZOMBIE_WRITE_REJECTED",
-      outcome: "REJECTED_STALE_LEASE",
-      details: { activeHolderInstanceId: activeHolder, activeLeaseEpoch },
-    },
-    tx,
-  );
+if (staleEpoch || holderMismatch) {
+  const rejectionReason = staleEpoch ? "STALE_LEASE_EPOCH" : "LEASE_HOLDER_MISMATCH";
+  const evidence: ProtectedWriteRejectionEvidence = {
+    attemptedOperation: params.attemptedOperation,
+    targetArtifactId: params.targetArtifactId,
+    workerInstanceId: params.capturedInstanceId,
+    executionId: params.executionId,
+    logicalTaskId: params.logicalTaskId,
+    idempotencyKey: params.idempotencyKey,
+    capturedToken: { holderInstanceId: params.capturedInstanceId, leaseEpoch: params.capturedLeaseEpoch },
+    observedToken: { holderInstanceId: activeHolderInstanceId, leaseEpoch: activeLeaseEpoch },
+    rejectionReason,
+    capturedCheckpointId: params.capturedCheckpointId,
+    observedHeadCheckpointId: headCp.checkpointId,
+    // ...
+  };
+  await this.appendEvent({ ...params, operation: "ZOMBIE_WRITE_REJECTED", outcome: "REJECTED_STALE_LEASE", details: evidence }, tx);
   return new StaleLeaseFenceError({ ... });
 }
 ```
 
-This creates a true **two-layer fence**:
-1. **Layer 1 (Application External Side-Effect Fence)**: Rejects the zombie's filesystem/ledger commit inside SQLite (`1 < 2`) and throws `StaleLeaseFenceError`.
+This creates a true **two-layer fence** on the protected shared-storage path:
+1. **Layer 1 (Application Protected-Storage Fence)**: Atomically rejects the zombie's ledger commit inside SQLite (`1 < 2`), records structured rejection evidence (`ZOMBIE_WRITE_REJECTED`) before any filesystem write can occur, and throws `StaleLeaseFenceError`.
 2. **Layer 2 (AGBoss Runtime Checkpoint Fence)**: When the zombie worker exits the step, `LeasedCheckpointSaver.putWrites()` attempts `ExecutionLeaseRepository.renew({ leaseEpoch: 1 })`, which returns `false` and throws `ExecutionLeaseLostError` (`code: "execution.lease-lost"`), preventing any split-brain checkpoint branch.
 
-### 4. Independent Verification Against AGBoss's Internal Tables (Not Just App Event Logs)
+### 4. Independent Verification: Distinguishing Rejected Stale Writes from Unattempted Writes
 
-Checking only that an application log contains `"ZOMBIE_WRITE_REJECTED"` is not a sufficient proof of runtime correctness. Both our Vitest suite ([`module-worker.workflow.test.ts`](https://github.com/agbossjs/distributed-agent-recovery/blob/main/tests/workflows/module-worker/module-worker.workflow.test.ts)) and [`ReleaseInvariantVerifierService`](https://github.com/agbossjs/distributed-agent-recovery/blob/main/src/services/release-invariant-verifier.service.ts) (`INV-1` through `INV-8`) directly inspect **AGBoss's own internal SQLite tables** via [`ClusterSnapshotRepository`](https://github.com/agbossjs/distributed-agent-recovery/blob/main/src/repositories/cluster-snapshot.repository.ts):
+A clean final artifact committed under `leaseEpoch = 2` is necessary, **not sufficient**, to prove that fencing actively stopped a zombie write: both a stale worker whose write was explicitly rejected and a stale worker that died or stayed suspended before reaching the protected-write boundary produce the same clean final artifact.
 
-- **`execution_leases`**: Confirms `execution_id = f9907abf-19fd-498b-8397-49152e25345f` advanced to `lease_epoch = 2`, is owned by replacement worker `2cfa9c79-...` (not stalled worker `bfa0c7de-...`), and finished cleanly with `released = 1`.
-- **`checkpoints`**: Traverses every LangGraph checkpoint row (`6` checkpoints for the recovered child execution) and verifies that `parent_checkpoint_id` forms a **single strictly linear unbranched chain**—proving `LeasedCheckpointSaver` blocked the zombie worker from writing a competing checkpoint fork.
-- **`child_execution_queue`**: Confirms `0` unclaimed or orphaned child execution rows remain.
+To make that distinction observable and testable, [`ProtectedWriteVerifierService`](https://github.com/agbossjs/distributed-agent-recovery/blob/main/src/services/protected-write-verifier.service.ts) and [`ReleaseInvariantVerifierService`](https://github.com/agbossjs/distributed-agent-recovery/blob/main/src/services/release-invariant-verifier.service.ts) (`INV-1` through `INV-8`) correlate application rejection records against **AGBoss's internal SQLite tables** ([`ClusterSnapshotRepository`](https://github.com/agbossjs/distributed-agent-recovery/blob/main/src/repositories/cluster-snapshot.repository.ts)) and parsed on-disk artifact payloads:
+
+- **Explicit Outcome Classification**: Distinguishes `STALE_WRITE_REJECTED` (`fencingRejectionDemonstrated: true`, verified via `--verify-only --require-stale-write-rejection`), `STALE_WRITE_NOT_ATTEMPTED` (`fencingRejectionDemonstrated: false`, reproduced via `--no-stale-write-attempt` or `AGBOSS_CRASH_WORKER_ON_STALL=true` with zero fabricated rejection events), `VALID_OWNER_ACCEPTED`, and `MISSING_OR_INCONSISTENT_EVIDENCE`.
+- **`execution_leases` & `fencing_tokens`**: Confirms `execution_id = f9907abf-19fd-498b-8397-49152e25345f` advanced to `lease_epoch = 2`, is owned by replacement worker `2cfa9c79-...` (matching `observedToken`), and finished cleanly with `released = 1`.
+- **`checkpoints`**: Traverses every LangGraph checkpoint row (`6` checkpoints for the recovered child execution), verifies `parent_checkpoint_id` forms a **single strictly linear unbranched chain**, and correlates `capturedCheckpointId` / `observedHeadCheckpointId` on `ZOMBIE_WRITE_REJECTED` to that exact checkpoint lineage.
+- **On-Disk Protected Artifacts & `child_execution_queue`**: Parses `.artifact.json`, `.manifest.json`, and `release-manifest.json` on disk to confirm the stale attempt never modified the replacement owner's artifact, and confirms `0` orphaned rows remain in `child_execution_queue`.
 
 *(Note: reading `@agboss/core@0.1.0`'s internal SQLite tables directly in `ClusterSnapshotRepository` is a verification-only diagnostic technique for proving runtime invariants, not a recommended application integration API.)*
 
@@ -217,7 +223,7 @@ All 8 invariants run automatically on every push in GitHub Actions across **thre
 - **Reversible Compensation vs. Hard-Kill Lease Recovery**: Saga compensation only undoes *reversible* operations (such as deleting staged candidate files prior to final promotion) when an active workflow hits a downstream error (`ReleaseGateFailedError`); irreversible external effects must still be gated behind final promotion or an outbox. Moreover, a hard-killed worker (`SIGKILL` / `exit 137`) does not run in-process compensation when it dies—instead, its lease expires and a surviving worker resumes the child execution from its last checkpoint.
 - **Fixed Worker Pool Failover (No Autoscaler Claimed)**: Work is distributed and recovered across a fixed pool of worker processes/containers (`ChildPlacement.AnyInstance`). Dynamic horizontal autoscaling (e.g., HPA/KEDA scaling pods on queue depth) is orthogonal and not claimed here.
 - **Single-Host Shared SQLite `WAL` vs. Multi-Host Distributed Storage**: Sharing a SQLite database in `WAL` mode across OS processes, Docker Compose containers, or single-node `kind` pods gives anyone a zero-dependency distributed sandbox relying on single-host kernel file locks. Multi-node clusters across separate hosts require network-backed storage repositories (such as PostgreSQL) implementing the same monotonic `leaseEpoch` fencing contract.
-- **Cooperative External I/O Fencing**: Neither Node.js nor LangGraph can pre-empt an in-flight userland syscall mid-step without killing the process; any external store mutated *inside* an `@Action` must validate the monotonic `leaseEpoch` fencing token or `step.idempotencyKey`.
+- **Protected Shared-Storage Fencing vs. Arbitrary External Side Effects**: Neither Node.js nor LangGraph can pre-empt an in-flight userland syscall mid-step without killing the process. Monotonic `leaseEpoch` fencing prevents stale writes on the **protected shared-storage path** (where the SQLite release ledger atomically validates `(holderInstanceId, leaseEpoch)` and `step.idempotencyKey` before committing state and writing artifact files), and does **not** establish "exactly-once" behavior for arbitrary uncooperative external side effects (third-party REST APIs, emails, webhooks, or unguarded filesystem writes that do not enforce fencing tokens). Likewise, the verifier never infers "no attempt occurred" from a missing rejection event without explicit pre-write stall instrumentation (`SUSPENDED_BEFORE_WRITE` or `TERMINATED_BEFORE_WRITE`).
 
 ---
 

@@ -6,6 +6,7 @@ import {
   sqliteMasterTable,
 } from "../schemas/agboss-cluster.schema.js";
 import {
+  faultInjectionStallsTable,
   fencingTokensTable,
   ledgerEventsTable,
   releaseArtifactsTable,
@@ -57,6 +58,14 @@ export class ClusterSnapshotRepository {
           .from(fencingTokensTable)
           .where(id === undefined ? undefined : eq(fencingTokensTable.releaseId, id))
           .orderBy(asc(fencingTokensTable.attemptNumber), asc(fencingTokensTable.logicalTaskId)),
+        stalls: await db
+          .select()
+          .from(faultInjectionStallsTable)
+          .where(id === undefined ? undefined : eq(faultInjectionStallsTable.releaseId, id))
+          .orderBy(
+            asc(faultInjectionStallsTable.attemptNumber),
+            asc(faultInjectionStallsTable.logicalTaskId),
+          ),
         events: await db
           .select()
           .from(ledgerEventsTable)

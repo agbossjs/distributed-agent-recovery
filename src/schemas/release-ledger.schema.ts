@@ -7,7 +7,44 @@ import type {
 
 export type ArtifactStatus = "STAGED" | "COMPENSATED" | "PROMOTED";
 export type CandidateLockStatus = "LOCKED" | "COMPENSATED" | "PROMOTED";
-export type StallStatus = "STALLED" | "FENCED";
+export type NonAttemptStallDisposition =
+  | "TERMINATED_BEFORE_WRITE"
+  | "SUSPENDED_BEFORE_WRITE";
+export type StallDisposition =
+  | "RESUME_AND_ATTEMPT_WRITE"
+  | NonAttemptStallDisposition;
+export type StallStatus = "STALLED" | "FENCED" | NonAttemptStallDisposition;
+export type StaleWriteRejectionReason =
+  | "STALE_LEASE_EPOCH"
+  | "LEASE_HOLDER_MISMATCH";
+
+export interface FencingTokenSnapshot {
+  readonly holderInstanceId: string;
+  readonly leaseEpoch: number;
+}
+
+export interface ProtectedWriteRejectionEvidence {
+  readonly attemptedOperation: "STAGE_ARTIFACT";
+  readonly targetArtifactId: string;
+  readonly targetStagingArtifactPath: string;
+  readonly candidateDigest: string;
+  readonly workerInstanceId: string;
+  readonly executionId: string;
+  readonly releaseId: string;
+  readonly attemptNumber: number;
+  readonly logicalTaskId: string;
+  readonly moduleName: string;
+  readonly idempotencyKey: string;
+  readonly capturedToken: FencingTokenSnapshot;
+  readonly observedToken: FencingTokenSnapshot;
+  readonly rejectionReason: StaleWriteRejectionReason;
+  readonly errorCode: string;
+  readonly capturedCheckpointId: string | null;
+  readonly observedHeadCheckpointId: string | null;
+  readonly checkpointThreadId: string | null;
+  readonly activeHolderInstanceId: string;
+  readonly activeLeaseEpoch: number;
+}
 
 export const releaseArtifactsTable = sqliteTable("release_artifacts", {
   artifactId: text("artifact_id").primaryKey(),
@@ -112,8 +149,49 @@ export interface LedgerSnapshot {
   readonly artifacts: readonly LedgerArtifactRow[];
   readonly candidateLocks: readonly LedgerCandidateLockRow[];
   readonly fencingTokens: readonly FencingTokenRow[];
+  readonly stalls?: readonly FaultInjectionStallRow[];
   readonly events: readonly LedgerEventRow[];
   readonly executionLeases: readonly ExecutionLeaseRow[];
   readonly childQueue: readonly ChildExecutionQueueRow[];
   readonly checkpoints: readonly AgbossCheckpointRow[];
+}
+
+export type ProtectedWriteOutcome =
+  | "STALE_WRITE_REJECTED"
+  | "STALE_WRITE_NOT_ATTEMPTED"
+  | "VALID_OWNER_ACCEPTED"
+  | "MISSING_OR_INCONSISTENT_EVIDENCE";
+
+export interface TaskProtectedWriteVerification {
+  readonly logicalTaskId: string;
+  readonly moduleName: string;
+  readonly executionId: string | null;
+  readonly artifactId: string | null;
+  readonly preparedByInstanceId: string | null;
+  readonly committedByInstanceId: string | null;
+  readonly committedLeaseEpoch: number | null;
+  readonly checkpointCount: number;
+  readonly linearCheckpointChain: boolean;
+  readonly agbossExecutionLeaseEpoch: number | null;
+  readonly agbossExecutionLeaseHolder: string | null;
+  readonly agbossExecutionLeaseReleased: number | null;
+  readonly orphanedChildQueueRows: number;
+  readonly outcome: ProtectedWriteOutcome;
+  readonly fencingRejectionDemonstrated: boolean;
+  readonly protectedArtifactVerifiedOnDisk: boolean;
+  readonly nonAttemptDisposition: NonAttemptStallDisposition | null;
+  readonly rejectionEvidence: ProtectedWriteRejectionEvidence | null;
+  readonly issues: readonly string[];
+}
+
+export interface ProtectedWriteVerificationSummary {
+  readonly releaseId: string;
+  readonly attemptNumber: number;
+  readonly outcome: ProtectedWriteOutcome;
+  readonly fencingRejectionDemonstrated: boolean;
+  readonly rejectedStaleWriteCount: number;
+  readonly unattemptedStaleWorkerCount: number;
+  readonly validOwnerAcceptedCount: number;
+  readonly inconsistentTaskCount: number;
+  readonly tasks: readonly TaskProtectedWriteVerification[];
 }
