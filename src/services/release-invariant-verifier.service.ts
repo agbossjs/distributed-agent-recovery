@@ -1,8 +1,14 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { Injectable } from "@agboss/core";
-import { ReleaseArtifactRepository } from "../repositories/release-artifact.repository.js";
-import type { LedgerArtifactRow, LedgerSnapshot } from "../schemas/release-ledger.schema.js";
+import { LedgerSnapshotRepository } from "../repositories/ledger-snapshot.repository.js";
+import type {
+  LedgerArtifactRow,
+  LedgerEventRow,
+  LedgerSnapshot,
+  WorkerStallRow,
+} from "../schemas/release-ledger.schema.js";
+import { StallMode } from "./worker-stall.service.js";
 
 export interface InvariantCheckResult {
   readonly id: string;
@@ -21,7 +27,13 @@ export interface InvariantVerificationReport {
 }
 
 const DEFAULT_MODULES = ["auth-service", "payment-engine", "telemetry-collector"] as const;
+const STAGE_EFFECT = "FENCED_EFFECT:stage-module-artifact";
 
+/**
+ * The eight invariants of a recovered release, read from the ledger's SQLite file alone: the
+ * artifacts, the candidate locks, the stall drill's mark and the evidence timeline (the ledger's
+ * own events and the lease events the `LeaseEvidenceObserver` copies from the framework's audit log).
+ */
 @Injectable()
 export class ReleaseInvariantVerifierService {
   static async verifyFromFile(params: {
@@ -29,24 +41,23 @@ export class ReleaseInvariantVerifierService {
     readonly artifactDir: string;
     readonly releaseId?: string;
     readonly expectedModules?: readonly string[];
+    /** False for a run without the stall drill: invariants 7 and 8 are about it and are left out. */
+    readonly takeoverDrill?: boolean;
   }): Promise<InvariantVerificationReport> {
     const releaseId = params.releaseId ?? "rel-2026.10.0";
     const expected = [...(params.expectedModules ?? DEFAULT_MODULES)].sort();
     if (!existsSync(params.sqlitePath)) {
       throw new Error(`SQLite database not found at ${params.sqlitePath}`);
     }
-    const snap = await ReleaseArtifactRepository.readSnapshotFromFile({
-      sqlitePath: params.sqlitePath,
-      artifactDir: params.artifactDir,
-      releaseId,
-    });
-    return ReleaseInvariantVerifierService.verifySnapshot(snap, releaseId, expected);
+    const snap = await LedgerSnapshotRepository.readFromFile({ ...params, releaseId });
+    return ReleaseInvariantVerifierService.verifySnapshot(snap, releaseId, expected, params.takeoverDrill ?? true);
   }
 
   static verifySnapshot(
     snap: LedgerSnapshot,
     releaseId: string,
     expected: readonly string[],
+    takeoverDrill = true,
   ): InvariantVerificationReport {
     const promoted = snap.artifacts.filter((a) => a.attemptNumber === 2 && a.status === "PROMOTED");
     const attempt1 = snap.artifacts.filter((a) => a.attemptNumber === 1);
@@ -57,7 +68,7 @@ export class ReleaseInvariantVerifierService {
       checkSagaCompensations(snap, attempt1, expected),
       checkNoDuplicateCommits(snap.artifacts, promoted, expected),
       checkMultiInstanceParticipation(snap.artifacts),
-      ...checkZombieFencingAndTakeover(snap, promoted),
+      ...(takeoverDrill ? checkZombieFencingAndTakeover(snap, promoted) : []),
     ];
     return {
       releaseId,
@@ -116,7 +127,7 @@ function checkSagaCompensations(
   const compEvents = snap.events.filter((e) => e.attemptNumber === 1 && e.outcome === "COMPENSATED");
   const ok = lock1?.status === "COMPENSATED" && compArts.length === expected.length && compEvents.length === expected.length + 1;
   return check(4, "INV-4-SAGA-COMPENSATIONS-RECORDED-AND-APPLIED", "Compensations were actually recorded and applied", ok, {
-    lockStatus: lock1?.status ?? "MISSING", compensatedArtifacts: compArts.length,
+    lockStatus: lock1?.status ?? "MISSING", compensatedArtifacts: compArts.length, compensationEvents: compEvents.length,
   });
 }
 
@@ -145,45 +156,70 @@ function checkMultiInstanceParticipation(all: readonly LedgerArtifactRow[]): Inv
   });
 }
 
+/** What the evidence timeline says about the stalled execution's leases, per instance. */
+interface StallEvidence {
+  readonly takeover: LedgerEventRow | undefined;
+  readonly refusedAtWrite: LedgerEventRow | undefined;
+  readonly handedOver: LedgerEventRow | undefined;
+  readonly replacementWrite: LedgerEventRow | undefined;
+}
+
+function evidenceOf(snap: LedgerSnapshot, stall: WorkerStallRow): StallEvidence {
+  const own = snap.events.filter((e) => e.executionId === stall.executionId);
+  const byStalled = own.filter((e) => e.instanceId === stall.stalledInstanceId);
+  return {
+    takeover: own.find((e) => e.operation === "LEASE_TAKEOVER" && e.instanceId !== stall.stalledInstanceId),
+    refusedAtWrite: byStalled.find((e) => e.operation === STAGE_EFFECT && e.outcome === "refused"),
+    handedOver: byStalled.find((e) => e.operation === "STEP_HANDED_OVER"),
+    replacementWrite: own.find(
+      (e) => e.operation === STAGE_EFFECT && e.outcome === "ran" && e.instanceId !== stall.stalledInstanceId,
+    ),
+  };
+}
+
 function checkZombieFencingAndTakeover(
   snap: LedgerSnapshot, promoted: readonly LedgerArtifactRow[],
 ): readonly [InvariantCheckResult, InvariantCheckResult] {
-  const stall = snap.events.find((e) => e.operation === "WORKER_STALLED_LEASE_EXPIRED");
-  const zombieRej = snap.events.find((e) => e.operation === "ZOMBIE_WRITE_REJECTED");
-  const runtimeFence = snap.events.find((e) => e.operation === "RUNTIME_LEASE_FENCED");
-  const takeover = snap.events.find((e) => e.operation === "LEASE_TAKEOVER_COMPLETED");
-
-  const agbossLease = snap.executionLeases.find((l) => l.rootExecutionId === stall?.executionId);
-  const childCps = stall === undefined ? [] : snap.checkpoints.filter(
-    (c) => c.threadId === stall.executionId || c.threadId.endsWith(`/child/${stall.executionId}`),
-  );
-  const linearCpChain = childCps.length >= 4 && new Set(childCps.map((c) => c.parentCheckpointId ?? "__root__")).size === childCps.length;
-  const leaseFenced = agbossLease !== undefined && agbossLease.leaseEpoch >= 2 && agbossLease.holderInstanceId !== stall?.instanceId && agbossLease.released === 1;
-  const orphanedQueue = snap.childQueue.filter((q) => q.executionId === stall?.executionId && q.status !== "finished");
-
-  const expectHardCrash = process.env["AGBOSS_CRASH_WORKER_ON_STALL"] === "true";
-  const zombieFenced = expectHardCrash
-    ? zombieRej === undefined
-    : zombieRej !== undefined && runtimeFence !== undefined && stall?.instanceId === zombieRej.instanceId;
-  const inv7Ok = stall !== undefined && stall.leaseEpoch === 1 && zombieFenced && leaseFenced && linearCpChain;
+  const stall = snap.stalls.find((s) => s.attemptNumber === 2);
+  const evidence = stall === undefined ? undefined : evidenceOf(snap, stall);
+  const hardCrash = stall?.mode === StallMode.CrashProcess;
   const rec = promoted.find((a) => a.logicalTaskId === stall?.logicalTaskId);
-  const inv8Ok = stall !== undefined && takeover !== undefined && rec !== undefined &&
-    rec.executionId === stall.executionId && rec.preparedByInstanceId === stall.instanceId &&
-    rec.committedByInstanceId !== rec.preparedByInstanceId && rec.leaseEpoch >= 2 &&
-    agbossLease?.holderInstanceId === rec.committedByInstanceId && agbossLease.leaseEpoch === rec.leaseEpoch && orphanedQueue.length === 0;
+  const replacementToken = evidence?.replacementWrite?.fencingToken ?? null;
+  const takeoverToken = evidence?.takeover?.fencingToken ?? null;
+
+  // a zombie that woke is refused at its protected write (layer 1: the fenced effect) or stopped by the
+  // lease's own fence before it got there (layer 2: the hand-over); one that died never writes at all
+  const zombieFenced = hardCrash
+    ? evidence?.refusedAtWrite === undefined && evidence?.handedOver === undefined
+    : evidence?.refusedAtWrite !== undefined || evidence?.handedOver !== undefined;
+  const staleWriteCommitted = stall !== undefined && promoted.some(
+    (a) => a.logicalTaskId === stall.logicalTaskId && a.committedByInstanceId === stall.stalledInstanceId,
+  );
+  const inv7Ok = stall !== undefined && evidence?.takeover !== undefined && zombieFenced && !staleWriteCommitted &&
+    (takeoverToken ?? 0) >= 2;
+  const inv8Ok = stall !== undefined && rec !== undefined && evidence?.takeover !== undefined &&
+    rec.executionId === stall.executionId && rec.preparedByInstanceId === stall.stalledInstanceId &&
+    rec.committedByInstanceId !== rec.preparedByInstanceId &&
+    rec.committedByInstanceId === evidence.takeover.instanceId && (replacementToken ?? 0) >= 2;
 
   return [
-    check(7, "INV-7-ZOMBIE-WORKER-FENCED", "Zombie worker fenced at both external ledger and AGBoss LeasedCheckpointSaver/execution_leases tables", inv7Ok, {
-      stalledInstanceId: stall?.instanceId ?? null, executionId: stall?.executionId ?? null,
-      agbossExecutionLeaseEpoch: agbossLease?.leaseEpoch ?? null, agbossExecutionLeaseHolder: agbossLease?.holderInstanceId ?? null,
-      agbossExecutionLeaseReleased: agbossLease?.released ?? null, agbossCheckpointCount: childCps.length,
-      agbossLinearCheckpointChainNoZombieFork: linearCpChain,
+    check(7, "INV-7-ZOMBIE-WORKER-FENCED", "Zombie worker fenced: its lease was taken over at a higher fencing token and its stale write never committed", inv7Ok, {
+      stallMode: stall?.mode ?? null,
+      stalledInstanceId: stall?.stalledInstanceId ?? null,
+      executionId: stall?.executionId ?? null,
+      takeoverFencingToken: takeoverToken,
+      layer1RefusedAtFencedWrite: evidence?.refusedAtWrite !== undefined,
+      layer1ObservedToken: evidence?.refusedAtWrite === undefined ? null : evidence.refusedAtWrite.details,
+      layer2StepHandedOver: evidence?.handedOver?.outcome ?? null,
+      staleWriteCommitted,
     }),
-    check(8, "INV-8-ORIGINAL-LOGICAL-TASK-COMPLETED-AFTER-TAKEOVER", "Original child execution recovered on replacement instance and verified in AGBoss execution_leases & child_execution_queue", inv8Ok, {
-      logicalTaskId: stall?.logicalTaskId ?? null, preservedExecutionId: rec?.executionId ?? null,
-      preparedBy: rec?.preparedByInstanceId ?? null, takenOverBy: rec?.committedByInstanceId ?? null,
-      committedLeaseEpoch: rec?.leaseEpoch ?? null, agbossLeaseHolderMatchesCommitter: agbossLease?.holderInstanceId === rec?.committedByInstanceId,
-      orphanedChildQueueRows: orphanedQueue.length,
+    check(8, "INV-8-ORIGINAL-LOGICAL-TASK-COMPLETED-AFTER-TAKEOVER", "Original child execution resumed from its checkpoint on the replacement worker and committed once", inv8Ok, {
+      logicalTaskId: stall?.logicalTaskId ?? null,
+      preservedExecutionId: rec?.executionId ?? null,
+      preparedBy: rec?.preparedByInstanceId ?? null,
+      takenOverBy: rec?.committedByInstanceId ?? null,
+      replacementFencingToken: replacementToken,
+      takeoverHolderMatchesCommitter: evidence?.takeover?.instanceId === rec?.committedByInstanceId,
     }),
   ];
 }

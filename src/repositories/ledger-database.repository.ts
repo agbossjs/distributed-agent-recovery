@@ -1,28 +1,25 @@
 import { readFileSync } from "node:fs";
 import { DatabaseSync, type SQLInputValue, type SQLOutputValue } from "node:sqlite";
-import { Injectable, SqliteConnection } from "@agboss/core";
-import { and, eq, sql } from "drizzle-orm";
-import type { BaseSQLiteDatabase } from "drizzle-orm/sqlite-core";
-import { drizzle, type SqliteRemoteDatabase, type SqliteRemoteResult } from "drizzle-orm/sqlite-proxy";
-import { sqliteMasterTable } from "../schemas/agboss-cluster.schema.js";
+import { Injectable } from "@agboss/core";
+import { SqliteConnection } from "@agboss/core/stores";
+import { sql } from "drizzle-orm";
+import { drizzle, type SqliteRemoteDatabase } from "drizzle-orm/sqlite-proxy";
 
-export type LedgerDrizzleExecutor = BaseSQLiteDatabase<"async", SqliteRemoteResult, Record<string, never>>;
+/** The typed query builder of the release ledger, over one SQLite handle. */
+export type LedgerDb = SqliteRemoteDatabase;
 
-interface RecordedRead {
-  readonly querySql: string;
-  readonly sqlParams: readonly SQLInputValue[];
-  readonly method: "all" | "get" | "values";
-  readonly fingerprint: string;
+/** What a drizzle statement needs of a SQLite handle: the connection's, the effect's or a file's. */
+interface LedgerStatement {
+  all(...parameters: SQLInputValue[]): unknown;
+  get(...parameters: SQLInputValue[]): unknown;
+  run(...parameters: SQLInputValue[]): unknown;
 }
 
-interface BufferedWrite {
-  readonly querySql: string;
-  readonly sqlParams: readonly SQLInputValue[];
+interface LedgerHandle {
+  prepare(querySql: string): LedgerStatement;
 }
 
 const RELEASE_LEDGER_DDL = readFileSync(new URL("../sql/0001-release-ledger.sql", import.meta.url), "utf8");
-const initializedConnections = new WeakMap<SqliteConnection, SqliteRemoteDatabase>();
-const processQueues = new Map<string, Promise<unknown>>();
 
 function toSqlInput(value: unknown): SQLInputValue {
   if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "bigint") {
@@ -34,150 +31,80 @@ function toSqlInput(value: unknown): SQLInputValue {
   return value instanceof Uint8Array ? value : String(value);
 }
 
-function toValueRow(row: Record<string, SQLOutputValue>): SQLOutputValue[] {
-  return Array.isArray(row) ? row : Object.values(row);
+function toValueRow(row: unknown): SQLOutputValue[] {
+  return Array.isArray(row) ? (row as SQLOutputValue[]) : Object.values(row as Record<string, SQLOutputValue>);
 }
 
-function fingerprintRows(rows: unknown): string {
-  return JSON.stringify(rows, (_key, val: unknown) => (typeof val === "bigint" ? val.toString() : val));
-}
-
-function executeSelect(
-  database: DatabaseSync,
-  querySql: string,
-  sqlParams: readonly SQLInputValue[],
-  method: "all" | "get" | "values",
-): { rows: unknown[] } {
-  const stmt = database.prepare(querySql);
-  stmt.setReturnArrays(true);
-  if (method === "get") {
-    const row = stmt.get(...sqlParams);
-    return row === undefined ? { rows: [] } : { rows: toValueRow(row) };
-  }
-  return { rows: stmt.all(...sqlParams).map(toValueRow) };
-}
-
-function createDirectDrizzle(database: DatabaseSync): SqliteRemoteDatabase {
-  return drizzle((querySql, params, method) => {
-    const sqlParams = params.map(toSqlInput);
+/**
+ * A drizzle database that runs every statement on `handle`. A statement of the connection may answer
+ * a promise while another instance's `runOnce` holds the file, one of the effect's transaction never
+ * does: both are awaited the same.
+ */
+export function ledgerDbOf(handle: LedgerHandle): LedgerDb {
+  return drizzle(async (querySql, params, method) => {
+    const statement = handle.prepare(querySql);
+    const args = params.map(toSqlInput);
     if (method === "run") {
-      database.prepare(querySql).run(...sqlParams);
-      return Promise.resolve({ rows: [] });
+      await statement.run(...args);
+      return { rows: [] };
     }
-    return Promise.resolve(executeSelect(database, querySql, sqlParams, method));
+    if (method === "get") {
+      const row = await statement.get(...args);
+      return { rows: row === undefined ? [] : toValueRow(row) };
+    }
+    const rows = (await statement.all(...args)) as unknown[];
+    return { rows: rows.map(toValueRow) };
   });
 }
 
-function commitAtomicSnapshot(
-  database: DatabaseSync,
-  reads: readonly RecordedRead[],
-  writes: readonly BufferedWrite[],
-): boolean {
-  if (writes.length === 0 && reads.length <= 1) {
-    return true;
-  }
-  database.exec("BEGIN IMMEDIATE");
-  try {
-    for (const read of reads) {
-      const fresh = executeSelect(database, read.querySql, read.sqlParams, read.method);
-      if (fingerprintRows(fresh.rows) !== read.fingerprint) {
-        database.exec("ROLLBACK");
-        return false;
-      }
-    }
-    for (const write of writes) {
-      database.prepare(write.querySql).run(...write.sqlParams);
-    }
-    database.exec("COMMIT");
-    return true;
-  } catch (error) {
-    database.exec("ROLLBACK");
-    throw error;
-  }
-}
-
+/**
+ * The release ledger's own tables in the application's SQLite file — the one the `@DatabaseStorage`
+ * opens, shared by every instance. A write is made only inside a fenced effect
+ * (`Idempotency.runOnce`), through the effect's transaction (`effectDb()`): it commits with the
+ * effect's stored result, and a worker whose lease was taken over is refused before it writes. A
+ * read goes through the connection (`db()`), which waits for any open effect transaction.
+ */
 @Injectable({ deps: [SqliteConnection] })
 export class LedgerDatabaseRepository {
   constructor(private readonly connection: SqliteConnection) {
-    this.ensureInitialized();
+    connection.ensureSchema("release-ledger", RELEASE_LEDGER_DDL);
   }
 
   get path(): string {
     return this.connection.path;
   }
 
-  get db(): SqliteRemoteDatabase {
-    return this.ensureInitialized();
+  /** The effect's transaction: only inside the `execute` of a `runOnce`. */
+  effectDb(): LedgerDb {
+    return ledgerDbOf(this.connection.requireTransaction());
   }
 
-  async hasTable(tableName: string, executor: LedgerDrizzleExecutor = this.db): Promise<boolean> {
-    const rows = await executor
-      .select({ name: sqliteMasterTable.name })
-      .from(sqliteMasterTable)
-      .where(and(eq(sqliteMasterTable.type, "table"), eq(sqliteMasterTable.name, tableName)))
-      .limit(1);
-    return rows.length > 0;
+  /** The connection itself, for reads and for the evidence's own writes (an observer is no step). */
+  db(): LedgerDb {
+    return ledgerDbOf(this.connection.database);
   }
 
-  async inTransaction<TResult>(work: (tx: LedgerDrizzleExecutor) => Promise<TResult>): Promise<TResult> {
-    this.ensureInitialized();
-    const key = this.connection.path;
-    const prev = processQueues.get(key) ?? Promise.resolve();
-    const next = prev.then(() => this.runOptimisticImmediate(work), () => this.runOptimisticImmediate(work));
-    processQueues.set(key, next.then(() => undefined, () => undefined));
-    return next;
+  /** `work` in one transaction of the file, for a write made outside a step (the evidence observer's). */
+  inHeldTransaction<TResult>(work: (db: LedgerDb) => Promise<TResult>): Promise<TResult> {
+    return this.connection.held((handle) => work(ledgerDbOf(handle)));
   }
 
   async ping(): Promise<boolean> {
-    await this.db.run(sql`SELECT 1`);
+    await this.connection.ping();
+    await this.db().run(sql`SELECT 1`);
     return true;
   }
 
+  /** The ledger of a finished or running cluster, opened read-only by path (the verifier, `--verify-only`). */
   static async withSqliteFile<TResult>(
     sqlitePath: string,
-    work: (db: LedgerDrizzleExecutor) => Promise<TResult>,
+    work: (db: LedgerDb) => Promise<TResult>,
   ): Promise<TResult> {
     const database = new DatabaseSync(sqlitePath, { timeout: 5000 });
-    database.exec("PRAGMA busy_timeout = 5000;");
     try {
-      return await work(createDirectDrizzle(database));
+      return await work(ledgerDbOf(database));
     } finally {
       database.close();
     }
-  }
-
-  private async runOptimisticImmediate<TResult>(work: (tx: LedgerDrizzleExecutor) => Promise<TResult>): Promise<TResult> {
-    const database = this.connection.database;
-    for (let attempt = 0; attempt < 12; attempt += 1) {
-      const reads: RecordedRead[] = [];
-      const writes: BufferedWrite[] = [];
-      const txDb = drizzle((querySql, params, method) => {
-        const sqlParams = params.map(toSqlInput);
-        if (method === "run") {
-          writes.push({ querySql, sqlParams });
-          return Promise.resolve({ rows: [] });
-        }
-        const res = executeSelect(database, querySql, sqlParams, method);
-        reads.push({ querySql, sqlParams, method, fingerprint: fingerprintRows(res.rows) });
-        return Promise.resolve(res);
-      });
-      const result = await work(txDb);
-      if (commitAtomicSnapshot(database, reads, writes)) {
-        return result;
-      }
-    }
-    throw new Error(`SQLite optimistic transaction exceeded retry budget on ${this.connection.path}`);
-  }
-
-  private ensureInitialized(): SqliteRemoteDatabase {
-    const existing = initializedConnections.get(this.connection);
-    if (existing !== undefined) {
-      return existing;
-    }
-    this.connection.database.exec("PRAGMA busy_timeout = 5000;");
-    this.connection.ensureSchema("release-ledger", RELEASE_LEDGER_DDL);
-    const created = createDirectDrizzle(this.connection.database);
-    initializedConnections.set(this.connection, created);
-    return created;
   }
 }

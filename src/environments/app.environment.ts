@@ -1,13 +1,9 @@
-import type { Secret } from "@agboss/core";
-
-process.env.PII_PSEUDONYM_KEY ??= "distributed-agent-recovery-pseudonym-key-32b!";
-process.env.OPENROUTER_API_KEY ??=
-  process.env.OPEN_ROUTER_KEY ?? "offline-test-openrouter-api-key";
-
+/**
+ * The environment contract: declared fields only. The ledger's SQLite file, the model provider's key
+ * and base URL are not here: the `@DatabaseStorage` and the `@ModelProvider` each read their own
+ * reference (`env(…)`, `secret(…)`) when the application starts.
+ */
 export class AppEnvironment {
-  sqlitePath!: string;
+  /** Where the staged and promoted artifact files go (shared by every instance of one machine). */
   artifactDir!: string;
-  nodeRole!: string;
-  piiPseudonymKey?: Secret;
-  openRouterApiKey!: Secret;
 }

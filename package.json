@@ -22,18 +22,18 @@
     "describe": "agboss describe",
     "lint": "eslint .",
     "test": "vitest run",
-    "demo": "tsx src/demo.ts",
-    "demo:live": "tsx src/demo.ts --live",
-    "demo:cluster": "tsx src/demo.ts --cluster",
+    "demo": "tsx src/scripts/demo.ts",
+    "demo:live": "tsx src/scripts/demo.ts --live",
+    "demo:cluster": "tsx src/scripts/demo.ts --cluster",
     "demo:compose": "sh -c 'docker compose -f deploy/compose/docker-compose.yml up -d --build --wait worker-alpha worker-beta && docker compose -f deploy/compose/docker-compose.yml run --rm -T --no-deps coordinator node dist/src/demo.js; CODE=$?; docker compose -f deploy/compose/docker-compose.yml down -v; exit $CODE'",
-    "verify": "tsx src/demo.ts --verify-only"
+    "verify": "tsx src/scripts/demo.ts --verify-only"
   },
   "dependencies": {
-    "@agboss/core": "0.1.0",
+    "@agboss/core": "0.1.1",
     "drizzle-orm": "^0.45.4"
   },
   "devDependencies": {
-    "@agboss/cli": "0.1.0",
+    "@agboss/cli": "0.1.1",
     "@eslint/js": "^9.22.0",
     "@stylistic/eslint-plugin": "^4.2.0",
     "@types/node": "^22.13.10",

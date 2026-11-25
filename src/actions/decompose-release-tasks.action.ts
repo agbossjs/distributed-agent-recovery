@@ -23,7 +23,7 @@ export class DecomposeReleaseTasksAction
   execute(
     input: InputOf<DecomposeReleaseTasksAction>,
   ): Promise<OutputOf<DecomposeReleaseTasksAction>> {
-    const req = input.releaseRequest.value;
+    const req = input.releaseRequest;
     const moduleNames = req.modules
       .split(",")
       .map((m) => m.trim())

@@ -8,7 +8,6 @@ CREATE TABLE IF NOT EXISTS release_artifacts (
   execution_id TEXT NOT NULL,
   prepared_by_instance_id TEXT NOT NULL,
   committed_by_instance_id TEXT NOT NULL,
-  lease_epoch INTEGER NOT NULL,
   idempotency_key TEXT NOT NULL UNIQUE,
   status TEXT NOT NULL,
   artifact_path TEXT NOT NULL,
@@ -39,41 +38,39 @@ CREATE TABLE IF NOT EXISTS release_candidate_locks (
   updated_at INTEGER NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS fencing_tokens (
-  tenant_id TEXT NOT NULL,
-  execution_id TEXT NOT NULL,
-  logical_task_id TEXT NOT NULL,
-  release_id TEXT NOT NULL,
-  attempt_number INTEGER NOT NULL,
-  highest_lease_epoch INTEGER NOT NULL,
-  current_holder_instance_id TEXT NOT NULL,
-  updated_at INTEGER NOT NULL,
-  PRIMARY KEY (tenant_id, execution_id)
-);
-
-CREATE TABLE IF NOT EXISTS fault_injection_stalls (
-  execution_id TEXT NOT NULL,
-  logical_task_id TEXT NOT NULL,
-  release_id TEXT NOT NULL,
-  attempt_number INTEGER NOT NULL,
-  stalled_instance_id TEXT NOT NULL,
-  stalled_lease_epoch INTEGER NOT NULL,
-  status TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  PRIMARY KEY (execution_id, stalled_instance_id, stalled_lease_epoch)
-);
-
-CREATE TABLE IF NOT EXISTS ledger_events (
-  event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+-- one row per module task execution: what step 1 prepared, and where (the key of every later join)
+CREATE TABLE IF NOT EXISTS module_preparations (
+  execution_id TEXT PRIMARY KEY,
   release_id TEXT NOT NULL,
   attempt_number INTEGER NOT NULL,
   logical_task_id TEXT NOT NULL,
   module_name TEXT NOT NULL,
+  prepared_by_instance_id TEXT NOT NULL,
+  candidate_digest TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+-- the stall drill: the worker that froze (or died) inside its step, written before it froze
+CREATE TABLE IF NOT EXISTS worker_stalls (
+  execution_id TEXT PRIMARY KEY,
+  logical_task_id TEXT NOT NULL,
+  release_id TEXT NOT NULL,
+  attempt_number INTEGER NOT NULL,
+  stalled_instance_id TEXT NOT NULL,
+  stalled_pid INTEGER NOT NULL,
+  mode TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+-- the evidence: what the ledger's own steps did, and what the framework's audit log said about
+-- the leases (mirrored by the LeaseEvidenceObserver), in one timeline
+CREATE TABLE IF NOT EXISTS ledger_events (
+  event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  release_id TEXT,
+  attempt_number INTEGER,
   execution_id TEXT NOT NULL,
   instance_id TEXT NOT NULL,
-  lease_epoch INTEGER NOT NULL,
-  idempotency_key TEXT NOT NULL,
+  fencing_token INTEGER,
   operation TEXT NOT NULL,
   outcome TEXT NOT NULL,
   details TEXT NOT NULL,

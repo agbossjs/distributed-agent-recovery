@@ -2,7 +2,7 @@ import { Tool, type ToolHandler } from "@agboss/core";
 import { seconds } from "@agboss/core/units";
 import { FailedAttemptInspectionDto } from "../dto/failed-attempt-inspection.dto.js";
 import { FailedAttemptQueryDto } from "../dto/failed-attempt-query.dto.js";
-import { ReleaseLedgerService } from "../services/release-ledger.service.js";
+import { ReleaseInspectionService } from "../services/release-inspection.service.js";
 
 @Tool({
   name: "inspect-failed-attempt-tool",
@@ -11,14 +11,14 @@ import { ReleaseLedgerService } from "../services/release-ledger.service.js";
   input: FailedAttemptQueryDto,
   output: FailedAttemptInspectionDto,
   timeout: seconds(5),
-  deps: [ReleaseLedgerService],
+  deps: [ReleaseInspectionService],
 })
 export class InspectFailedAttemptTool
   implements ToolHandler<FailedAttemptQueryDto, FailedAttemptInspectionDto>
 {
-  constructor(private readonly ledger: ReleaseLedgerService) {}
+  constructor(private readonly ledger: ReleaseInspectionService) {}
 
-  async run(input: FailedAttemptQueryDto): Promise<FailedAttemptInspectionDto> {
+  async execute(input: FailedAttemptQueryDto): Promise<FailedAttemptInspectionDto> {
     const inspection = await this.ledger.inspectFailedAttempt(
       input.releaseId,
       input.failedAttemptNumber,

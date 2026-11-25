@@ -28,8 +28,8 @@ export class VerifyReleaseSmokeGateAction
   ) {}
 
   async execute(input: InputOf<VerifyReleaseSmokeGateAction>): Promise<void> {
-    const req = input.releaseRequest.value;
-    const locked = input.lockedCandidate.value;
+    const req = input.releaseRequest;
+    const locked = input.lockedCandidate;
 
     if (req.simulateIntegrationFailure) {
       const diagnostic =
@@ -41,7 +41,6 @@ export class VerifyReleaseSmokeGateAction
         attemptNumber: req.attemptNumber,
         candidateLockId: locked.candidateLockId,
         executionId: this.executionContext.executionId,
-        idempotencyKey: this.executionContext.step.idempotencyKey,
         diagnostic,
       });
 

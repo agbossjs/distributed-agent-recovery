@@ -1,17 +1,15 @@
 import {
+  ChildPlacement,
   StepFailedError,
+  Ttl,
   Workflow,
-  action,
-  start,
+  onAction,
+  onStart,
   toAction,
 } from "@agboss/core";
 import { MarkModuleFailedAction } from "../../actions/mark-module-failed.action.js";
 import { PrepareModuleCandidateAction } from "../../actions/prepare-module-candidate.action.js";
 import { StageModuleArtifactAction } from "../../actions/stage-module-artifact.action.js";
-import { ModuleFailedDto } from "../../dto/module-failed.dto.js";
-import { ModuleTaskDto } from "../../dto/module-task.dto.js";
-import { PreparedModuleCandidateDto } from "../../dto/prepared-module-candidate.dto.js";
-import { StagedModuleArtifactDto } from "../../dto/staged-module-artifact.dto.js";
 import { ModuleFailedWorkflowFinish } from "./module-failed.workflow-finish.js";
 import { ModuleWorkerWorkflowFinish } from "./module-worker.workflow-finish.js";
 import { ModuleWorkerWorkflowStart } from "./module-worker.workflow-start.js";
@@ -19,19 +17,18 @@ import { ModuleWorkerWorkflowStart } from "./module-worker.workflow-start.js";
 @Workflow({
   name: "module-worker-workflow",
   version: "1.0.0",
+  historyTtl: Ttl.Forever,
+  // work stealing: the coordinator queues each module task and a worker other than itself claims it
+  placement: ChildPlacement.OtherWorker,
   flow: [
-    start(ModuleWorkerWorkflowStart)
-      .returns(ModuleTaskDto)
+    onStart(ModuleWorkerWorkflowStart)
       .toAction(PrepareModuleCandidateAction)
       .onError(StepFailedError, toAction(MarkModuleFailedAction))
-      .returns(PreparedModuleCandidateDto)
       .toAction(StageModuleArtifactAction)
       .onError(StepFailedError, toAction(MarkModuleFailedAction))
-      .returns(StagedModuleArtifactDto)
       .toFinish(ModuleWorkerWorkflowFinish),
 
-    action(MarkModuleFailedAction)
-      .returns(ModuleFailedDto)
+    onAction(MarkModuleFailedAction)
       .toFinish(ModuleFailedWorkflowFinish),
   ],
 })

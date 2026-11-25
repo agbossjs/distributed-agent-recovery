@@ -32,8 +32,8 @@ export class PromoteReleaseArtifactsAction
   async execute(
     input: InputOf<PromoteReleaseArtifactsAction>,
   ): Promise<OutputOf<PromoteReleaseArtifactsAction>> {
-    const req = input.releaseRequest.value;
-    const locked = input.lockedCandidate.value;
+    const req = input.releaseRequest;
+    const locked = input.lockedCandidate;
 
     const promoted = await this.candidates.promoteReleaseCandidate({
       releaseId: req.releaseId,
@@ -41,7 +41,6 @@ export class PromoteReleaseArtifactsAction
       attemptNumber: req.attemptNumber,
       candidateLockId: locked.candidateLockId,
       executionId: this.executionContext.executionId,
-      idempotencyKey: this.executionContext.step.idempotencyKey,
     });
 
     return {

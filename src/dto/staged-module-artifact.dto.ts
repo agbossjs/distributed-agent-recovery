@@ -28,8 +28,8 @@ export class StagedModuleArtifactDto {
   @Text({ prompt: "Worker instance ID that committed the staged artifact" })
   committedByInstanceId!: string;
 
-  @Integer({ prompt: "Lease epoch under which the artifact was committed", min: 1 })
-  leaseEpoch!: number;
+  @Integer({ prompt: "Fencing token of the lease the artifact was committed under (2 or more after a takeover)", min: 1 })
+  fencingToken!: number;
 
   @Text({ prompt: "Child workflow execution ID" })
   executionId!: string;

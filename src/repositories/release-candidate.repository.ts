@@ -7,7 +7,7 @@ import {
 } from "../schemas/release-ledger.schema.js";
 import {
   LedgerDatabaseRepository,
-  type LedgerDrizzleExecutor,
+  type LedgerDb,
 } from "./ledger-database.repository.js";
 
 @Injectable({ deps: [LedgerDatabaseRepository] })
@@ -16,7 +16,7 @@ export class ReleaseCandidateRepository {
 
   async findById(
     candidateLockId: string,
-    executor: LedgerDrizzleExecutor = this.database.db,
+    executor: LedgerDb = this.database.db(),
   ): Promise<LedgerCandidateLockRow | undefined> {
     const rows = await executor
       .select()
@@ -28,7 +28,7 @@ export class ReleaseCandidateRepository {
 
   async findByIdempotencyKey(
     idempotencyKey: string,
-    executor: LedgerDrizzleExecutor = this.database.db,
+    executor: LedgerDb = this.database.db(),
   ): Promise<LedgerCandidateLockRow | undefined> {
     const rows = await executor
       .select()
@@ -41,7 +41,7 @@ export class ReleaseCandidateRepository {
   async findFailureDiagnostic(
     releaseId: string,
     attemptNumber: number,
-    executor: LedgerDrizzleExecutor = this.database.db,
+    executor: LedgerDb = this.database.db(),
   ): Promise<string | null> {
     const rows = await executor
       .select({ failureDiagnostic: releaseCandidateLocksTable.failureDiagnostic })
@@ -58,7 +58,7 @@ export class ReleaseCandidateRepository {
 
   async insert(
     row: NewLedgerCandidateLockRow,
-    executor: LedgerDrizzleExecutor = this.database.db,
+    executor: LedgerDb = this.database.db(),
   ): Promise<void> {
     await executor.insert(releaseCandidateLocksTable).values(row);
   }
@@ -69,7 +69,7 @@ export class ReleaseCandidateRepository {
       readonly diagnostic: string;
       readonly updatedAt: number;
     },
-    executor: LedgerDrizzleExecutor = this.database.db,
+    executor: LedgerDb = this.database.db(),
   ): Promise<void> {
     await executor
       .update(releaseCandidateLocksTable)
@@ -86,7 +86,7 @@ export class ReleaseCandidateRepository {
       readonly compensatedByKey: string;
       readonly updatedAt: number;
     },
-    executor: LedgerDrizzleExecutor = this.database.db,
+    executor: LedgerDb = this.database.db(),
   ): Promise<void> {
     await executor
       .update(releaseCandidateLocksTable)
@@ -105,7 +105,7 @@ export class ReleaseCandidateRepository {
       readonly participatingInstances: string;
       readonly updatedAt: number;
     },
-    executor: LedgerDrizzleExecutor = this.database.db,
+    executor: LedgerDb = this.database.db(),
   ): Promise<void> {
     await executor
       .update(releaseCandidateLocksTable)

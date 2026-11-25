@@ -155,3 +155,39 @@ export function createOfflineOpenRouterFetch(): typeof fetch {
     );
   };
 }
+
+/**
+ * OpenRouter on loopback (`OPENROUTER_BASE_URL`): the provider's own base URL field points at this
+ * server, so an offline run goes through the real driver, retry policy and cost accounting — only the
+ * model's answers are scripted. Returns the URL to give the provider and the server to close.
+ */
+export async function startOfflineOpenRouterServer(): Promise<{
+  readonly baseUrl: string;
+  readonly close: () => Promise<void>;
+}> {
+  const { createServer } = await import("node:http");
+  const stub = createOfflineOpenRouterFetch();
+  const server = createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk: Buffer) => chunks.push(chunk));
+    request.on("end", () => {
+      const body = Buffer.concat(chunks).toString("utf8");
+      stub(`http://127.0.0.1${request.url ?? "/"}`, { method: request.method ?? "GET", body })
+        .then(async (answer) => {
+          response.writeHead(answer.status, { "content-type": "application/json" });
+          response.end(await answer.text());
+        })
+        .catch((error: unknown) => {
+          response.writeHead(500);
+          response.end(String(error));
+        });
+    });
+  });
+  await new Promise<void>((resolveListening) => server.listen(0, "127.0.0.1", resolveListening));
+  const address = server.address();
+  if (address === null || typeof address === "string") throw new Error("the offline OpenRouter stub has no port");
+  return {
+    baseUrl: `http://127.0.0.1:${String(address.port)}/api/v1`,
+    close: () => new Promise<void>((resolveClosed) => server.close(() => resolveClosed())),
+  };
+}

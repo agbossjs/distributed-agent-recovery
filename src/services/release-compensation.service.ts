@@ -1,18 +1,33 @@
-import { ApplicationContext, Clock, Injectable } from "@agboss/core";
+import { ApplicationContext, Clock, Idempotency, Injectable } from "@agboss/core";
+import { hours } from "@agboss/core/units";
 import { LedgerDatabaseRepository } from "../repositories/ledger-database.repository.js";
+import { LedgerEventRepository } from "../repositories/ledger-event.repository.js";
 import { ReleaseArtifactRepository } from "../repositories/release-artifact.repository.js";
 import { ReleaseCandidateRepository } from "../repositories/release-candidate.repository.js";
-import { LeaseFencingService } from "./lease-fencing.service.js";
 import { ReleaseArtifactStoreService } from "./release-artifact-store.service.js";
 
+export interface CompensationReceipt {
+  readonly compensatedModuleCount: number;
+  readonly failureDiagnostic: string;
+  /** The staged files the undo removed, newest first. */
+  readonly removedPaths: readonly string[];
+}
+
+/**
+ * The saga's undo of a locked release candidate: every staged artifact of the failed attempt is marked
+ * COMPENSATED (newest first) and the candidate with them — in one fenced effect, so a worker or a
+ * resumed side path that runs it twice compensates once. The staged files are removed after the
+ * effect, from its receipt: removing a file twice is a no-op.
+ */
 @Injectable({
   deps: [
     Clock,
     ApplicationContext,
+    Idempotency,
     LedgerDatabaseRepository,
     ReleaseArtifactRepository,
     ReleaseCandidateRepository,
-    LeaseFencingService,
+    LedgerEventRepository,
     ReleaseArtifactStoreService,
   ],
 })
@@ -20,10 +35,11 @@ export class ReleaseCompensationService {
   constructor(
     private readonly clock: Clock,
     private readonly applicationContext: ApplicationContext,
+    private readonly idempotency: Idempotency,
     private readonly ledgerDatabase: LedgerDatabaseRepository,
     private readonly artifactRepository: ReleaseArtifactRepository,
     private readonly candidateRepository: ReleaseCandidateRepository,
-    private readonly fencing: LeaseFencingService,
+    private readonly eventRepository: LedgerEventRepository,
     private readonly artifacts: ReleaseArtifactStoreService,
   ) {}
 
@@ -33,91 +49,57 @@ export class ReleaseCompensationService {
     readonly candidateLockId: string;
     readonly executionId: string;
     readonly compensationIdempotencyKey: string;
-  }): Promise<{
-    readonly compensatedModuleCount: number;
-    readonly failureDiagnostic: string;
-    readonly deduplicated: boolean;
-  }> {
-    const instanceId = this.applicationContext.instanceId;
-    const now = this.clock.now().getTime();
-
-    return this.ledgerDatabase.inTransaction(async (tx) => {
-      const lockRow = await this.candidateRepository.findById(params.candidateLockId, tx);
-      const failureDiagnostic =
-        lockRow?.failureDiagnostic ??
-        "ABI mismatch detected in staged modules; requires --abi-compat=v2";
-      if (lockRow?.status === "COMPENSATED") {
-        const cnt = await this.artifactRepository.countByAttemptAndStatuses(
-          { releaseId: params.releaseId, attemptNumber: params.attemptNumber, statuses: ["COMPENSATED"] },
+  }): Promise<CompensationReceipt> {
+    const { result } = await this.idempotency.runOnce({
+      name: "compensate-release-candidate",
+      ttl: hours(24),
+      execute: async (): Promise<CompensationReceipt> => {
+        const tx = this.ledgerDatabase.effectDb();
+        const now = this.clock.now().getTime();
+        const instanceId = this.applicationContext.instanceId;
+        const lockRow = await this.candidateRepository.findById(params.candidateLockId, tx);
+        const failureDiagnostic =
+          lockRow?.failureDiagnostic ?? "ABI mismatch detected in staged modules; requires --abi-compat=v2";
+        const active = await this.artifactRepository.findByAttemptAndStatuses(
+          { releaseId: params.releaseId, attemptNumber: params.attemptNumber, statuses: ["STAGED"], orderByCreatedDesc: true },
           tx,
         );
-        return { compensatedModuleCount: cnt, failureDiagnostic, deduplicated: true };
-      }
-
-      const active = await this.artifactRepository.findByAttemptAndStatuses(
-        {
-          releaseId: params.releaseId,
-          attemptNumber: params.attemptNumber,
-          statuses: ["STAGED"],
-          orderByCreatedDesc: true,
-        },
-        tx,
-      );
-      for (const art of active) {
-        this.artifacts.removeArtifactFile(art.artifactPath);
-        await this.artifactRepository.markCompensated(
+        for (const art of active) {
+          await this.artifactRepository.markCompensated(
+            { artifactId: art.artifactId, compensatedByKey: params.compensationIdempotencyKey, updatedAt: now },
+            tx,
+          );
+          await this.eventRepository.insert(
+            {
+              releaseId: params.releaseId, attemptNumber: params.attemptNumber, executionId: params.executionId,
+              instanceId, fencingToken: null, operation: "COMPENSATE_ARTIFACT", outcome: "COMPENSATED",
+              details: JSON.stringify({ artifactId: art.artifactId, moduleName: art.moduleName }), recordedAt: now,
+            },
+            tx,
+          );
+        }
+        await this.candidateRepository.markCompensated(
+          { candidateLockId: params.candidateLockId, compensatedByKey: params.compensationIdempotencyKey, updatedAt: now },
+          tx,
+        );
+        await this.eventRepository.insert(
           {
-            artifactId: art.artifactId,
-            compensatedByKey: params.compensationIdempotencyKey,
-            updatedAt: now,
+            releaseId: params.releaseId, attemptNumber: params.attemptNumber, executionId: params.executionId,
+            instanceId, fencingToken: null, operation: "COMPENSATE_CANDIDATE", outcome: "COMPENSATED",
+            details: JSON.stringify({ compensatedModuleCount: active.length }), recordedAt: now,
           },
           tx,
         );
-        await this.fencing.appendEvent(
-          {
-            releaseId: params.releaseId,
-            attemptNumber: params.attemptNumber,
-            logicalTaskId: art.logicalTaskId,
-            moduleName: art.moduleName,
-            executionId: params.executionId,
-            instanceId,
-            leaseEpoch: 1,
-            idempotencyKey: `${params.compensationIdempotencyKey}:${art.moduleName}`,
-            operation: "COMPENSATE_ARTIFACT",
-            outcome: "COMPENSATED",
-            details: { artifactId: art.artifactId },
-            now,
-          },
-          tx,
-        );
-      }
-
-      await this.candidateRepository.markCompensated(
-        {
-          candidateLockId: params.candidateLockId,
-          compensatedByKey: params.compensationIdempotencyKey,
-          updatedAt: now,
-        },
-        tx,
-      );
-      await this.fencing.appendEvent(
-        {
-          releaseId: params.releaseId,
-          attemptNumber: params.attemptNumber,
-          logicalTaskId: `${params.releaseId}:candidate-lock`,
-          moduleName: "release-bundle",
-          executionId: params.executionId,
-          instanceId,
-          leaseEpoch: 1,
-          idempotencyKey: params.compensationIdempotencyKey,
-          operation: "COMPENSATE_CANDIDATE",
-          outcome: "COMPENSATED",
-          details: { compensatedModuleCount: active.length },
-          now,
-        },
-        tx,
-      );
-      return { compensatedModuleCount: active.length, failureDiagnostic, deduplicated: false };
+        return {
+          compensatedModuleCount: active.length,
+          failureDiagnostic,
+          removedPaths: active.map((art) => art.artifactPath),
+        };
+      },
     });
+    for (const path of result.removedPaths) {
+      this.artifacts.removeArtifactFile(path);
+    }
+    return result;
   }
 }

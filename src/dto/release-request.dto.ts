@@ -1,4 +1,4 @@
-import { Flag, Integer, Text } from "@agboss/core/dto";
+import { Bool, Integer, Text } from "@agboss/core/dto";
 
 export class ReleaseRequestDto {
   @Text({ prompt: "Unique release identifier (e.g., rel-2026.10.0)" })
@@ -16,7 +16,7 @@ export class ReleaseRequestDto {
   @Text({ prompt: "Compiler and ABI flags for building the release modules" })
   buildFlags!: string;
 
-  @Flag({ prompt: "Whether the post-staging integration smoke gate should fail" })
+  @Bool({ prompt: "Whether the post-staging integration smoke gate should fail" })
   simulateIntegrationFailure!: boolean;
 
   @Text({ prompt: "Module name whose initial worker should stall mid-execution (empty string for none)" })

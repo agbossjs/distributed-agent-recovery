@@ -1,16 +1,14 @@
 import { Injectable } from "@agboss/core";
-import { and, asc, count, desc, eq, gte, inArray } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray } from "drizzle-orm";
 import {
   releaseArtifactsTable,
   type ArtifactStatus,
   type LedgerArtifactRow,
-  type LedgerSnapshot,
   type NewLedgerArtifactRow,
 } from "../schemas/release-ledger.schema.js";
-import { ClusterSnapshotRepository } from "./cluster-snapshot.repository.js";
 import {
   LedgerDatabaseRepository,
-  type LedgerDrizzleExecutor,
+  type LedgerDb,
 } from "./ledger-database.repository.js";
 
 @Injectable({ deps: [LedgerDatabaseRepository] })
@@ -19,7 +17,7 @@ export class ReleaseArtifactRepository {
 
   async findByIdempotencyKey(
     idempotencyKey: string,
-    executor: LedgerDrizzleExecutor = this.database.db,
+    executor: LedgerDb = this.database.db(),
   ): Promise<LedgerArtifactRow | undefined> {
     const rows = await executor
       .select()
@@ -31,7 +29,7 @@ export class ReleaseArtifactRepository {
 
   async insert(
     row: NewLedgerArtifactRow,
-    executor: LedgerDrizzleExecutor = this.database.db,
+    executor: LedgerDb = this.database.db(),
   ): Promise<void> {
     await executor.insert(releaseArtifactsTable).values(row);
   }
@@ -43,7 +41,7 @@ export class ReleaseArtifactRepository {
       readonly statuses: readonly ArtifactStatus[];
       readonly orderByCreatedDesc?: boolean;
     },
-    executor: LedgerDrizzleExecutor = this.database.db,
+    executor: LedgerDb = this.database.db(),
   ): Promise<LedgerArtifactRow[]> {
     return executor
       .select()
@@ -68,7 +66,7 @@ export class ReleaseArtifactRepository {
       readonly attemptNumber: number;
       readonly statuses: readonly ArtifactStatus[];
     },
-    executor: LedgerDrizzleExecutor = this.database.db,
+    executor: LedgerDb = this.database.db(),
   ): Promise<number> {
     const rows = await executor
       .select({ total: count() })
@@ -83,38 +81,13 @@ export class ReleaseArtifactRepository {
     return rows[0]?.total ?? 0;
   }
 
-  async hasActiveCommitAtMinEpoch(
-    params: {
-      readonly releaseId: string;
-      readonly attemptNumber: number;
-      readonly logicalTaskId: string;
-      readonly minLeaseEpoch: number;
-    },
-    executor: LedgerDrizzleExecutor = this.database.db,
-  ): Promise<boolean> {
-    const rows = await executor
-      .select({ artifactId: releaseArtifactsTable.artifactId })
-      .from(releaseArtifactsTable)
-      .where(
-        and(
-          eq(releaseArtifactsTable.releaseId, params.releaseId),
-          eq(releaseArtifactsTable.attemptNumber, params.attemptNumber),
-          eq(releaseArtifactsTable.logicalTaskId, params.logicalTaskId),
-          inArray(releaseArtifactsTable.status, ["STAGED", "PROMOTED"]),
-          gte(releaseArtifactsTable.leaseEpoch, params.minLeaseEpoch),
-        ),
-      )
-      .limit(1);
-    return rows.length > 0;
-  }
-
   async markCompensated(
     params: {
       readonly artifactId: string;
       readonly compensatedByKey: string;
       readonly updatedAt: number;
     },
-    executor: LedgerDrizzleExecutor = this.database.db,
+    executor: LedgerDb = this.database.db(),
   ): Promise<void> {
     await executor
       .update(releaseArtifactsTable)
@@ -132,7 +105,7 @@ export class ReleaseArtifactRepository {
       readonly artifactPath: string;
       readonly updatedAt: number;
     },
-    executor: LedgerDrizzleExecutor = this.database.db,
+    executor: LedgerDb = this.database.db(),
   ): Promise<void> {
     await executor
       .update(releaseArtifactsTable)
@@ -142,13 +115,5 @@ export class ReleaseArtifactRepository {
         updatedAt: params.updatedAt,
       })
       .where(eq(releaseArtifactsTable.artifactId, params.artifactId));
-  }
-
-  static readSnapshotFromFile(params: {
-    readonly sqlitePath: string;
-    readonly artifactDir: string;
-    readonly releaseId?: string;
-  }): Promise<LedgerSnapshot> {
-    return ClusterSnapshotRepository.readFromFile(params);
   }
 }

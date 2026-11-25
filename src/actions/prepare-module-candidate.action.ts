@@ -30,16 +30,14 @@ export class PrepareModuleCandidateAction
   async execute(
     input: InputOf<PrepareModuleCandidateAction>,
   ): Promise<OutputOf<PrepareModuleCandidateAction>> {
-    const task = input.moduleTask.value;
+    const task = input.moduleTask;
     const prepared = await this.ledger.recordModulePreparation({
       releaseId: task.releaseId,
-      version: task.version,
       attemptNumber: task.attemptNumber,
       logicalTaskId: task.logicalTaskId,
       moduleName: task.moduleName,
       buildFlags: task.buildFlags,
       executionId: this.executionContext.executionId,
-      idempotencyKey: this.executionContext.step.idempotencyKey,
     });
 
     return {
@@ -50,7 +48,6 @@ export class PrepareModuleCandidateAction
       moduleName: task.moduleName,
       buildFlags: task.buildFlags,
       preparedByInstanceId: prepared.preparedByInstanceId,
-      preparedUnderLeaseEpoch: prepared.preparedUnderLeaseEpoch,
       candidateDigest: prepared.candidateDigest,
       simulateWorkerStall: task.simulateWorkerStall,
     };

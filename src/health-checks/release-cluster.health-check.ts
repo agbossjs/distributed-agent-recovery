@@ -20,12 +20,8 @@ export class ReleaseClusterHealthCheck implements HealthCheckHandler {
       return HealthCheckResult.healthy();
     }
     if (state === "degraded") {
-      return HealthCheckResult.degraded({
-        reason: "SQLite WAL checkpoint latency above threshold",
-      });
+      return HealthCheckResult.degraded("SQLite WAL checkpoint latency above threshold");
     }
-    return HealthCheckResult.unhealthy({
-      reason: "Shared SQLite release ledger unreachable",
-    });
+    return HealthCheckResult.unhealthy("Shared SQLite release ledger unreachable");
   }
 }

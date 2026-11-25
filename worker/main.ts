@@ -1,43 +1,11 @@
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
-import { Clock, HealthStatus, createApp } from "@agboss/core";
-import { FastClusterClock } from "../scenarios/fast-cluster-clock.js";
-import {
-  createOfflineOpenRouterFetch,
-  isLiveDemoRequested,
-  requireLiveApiKey,
-} from "../scenarios/offline-openrouter-fetch.js";
+import { writeFileSync } from "node:fs";
+import { HealthStatus, createApp } from "@agboss/core";
+import "../src/scripts/offline-keys.js";
 import { DistributedAgentRecoveryApplication } from "../src/distributed-agent-recovery.application.js";
 
-const isLive = isLiveDemoRequested();
-const openRouterKey = isLive
-  ? requireLiveApiKey()
-  : "offline-test-openrouter-api-key";
-const useFastSweep =
-  process.env["AGBOSS_FAST_SWEEP"] === "true" &&
-  process.env["AGBOSS_REAL_CLOCK"] !== "true";
-
-if (process.env["SQLITE_PATH"] !== undefined) {
-  mkdirSync(dirname(process.env["SQLITE_PATH"]), { recursive: true });
-}
-if (process.env["ARTIFACT_DIR"] !== undefined) {
-  mkdirSync(process.env["ARTIFACT_DIR"], { recursive: true });
-}
-
-const app = await createApp(DistributedAgentRecoveryApplication, {
-  processEnv: {
-    ...process.env,
-    AGBOSS_NODE_ROLE: "worker",
-    OPENROUTER_API_KEY: openRouterKey,
-    PII_PSEUDONYM_KEY:
-      process.env["PII_PSEUDONYM_KEY"] ??
-      "distributed-agent-recovery-pseudonym-key-32b!",
-  },
-  ...(isLive ? {} : { providerFetch: createOfflineOpenRouterFetch() }),
-  ...(useFastSweep
-    ? { container: { overrides: new Map([[Clock, new FastClusterClock()]]) } }
-    : {}),
-});
+// a worker is an instance like any other: it reads SQLITE_PATH and ARTIFACT_DIR from its process, and
+// claims the module tasks a coordinator queues, and takes over the ones a frozen worker left behind
+const app = await createApp(DistributedAgentRecoveryApplication);
 
 const readiness = await app.checkReadiness();
 if (readiness.status !== HealthStatus.Healthy) {

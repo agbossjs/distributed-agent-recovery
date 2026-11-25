@@ -9,14 +9,12 @@ import { InspectFailedAttemptTool } from "../../tools/inspect-failed-attempt.too
   name: "release-recovery-planner-agent",
   description:
     "Analyzes a compensated release attempt using the SQLite release ledger tool and produces a corrected recovery plan for the next distributed release attempt.",
-  promptUrls: ["./release-recovery-planner.prompt.md"],
+  prompt: "./release-recovery-planner.prompt.md",
   model: "openai/gpt-4o-mini",
   reasoning: Reasoning.off(),
   temperature: 0,
   maxTokens: 800,
-  maxToolCalls: 2,
-  maxVisits: 2,
-  maxRetries: 1,
+  executionLimits: { maxToolCalls: 2, maxVisits: 2, maxRetries: 1 },
   tools: [InspectFailedAttemptTool],
   input: {
     releaseRequest: ReleaseRequestDto,

@@ -9,7 +9,6 @@ export interface PromotedModuleEntry {
   readonly artifactId: string;
   readonly preparedByInstanceId: string;
   readonly committedByInstanceId: string;
-  readonly leaseEpoch: number;
   readonly idempotencyKey: string;
   readonly moduleManifestPath: string;
 }
@@ -23,6 +22,22 @@ export class ReleaseArtifactStoreService {
     return env.artifactDir ?? join(process.cwd(), ".data/dev/artifacts");
   }
 
+  /** Where a module's staged artifact of one attempt lives: the same path for every worker that stages it. */
+  stagedArtifactPath(params: {
+    readonly releaseId: string;
+    readonly attemptNumber: number;
+    readonly moduleName: string;
+  }): string {
+    return join(
+      this.artifactDir(),
+      "staging",
+      params.releaseId,
+      `attempt-${String(params.attemptNumber)}`,
+      `${params.moduleName}.artifact.json`,
+    );
+  }
+
+  /** Writes the staged artifact file at its path; writing it again (a replayed step) rewrites the same content. */
   writeStagedArtifact(params: {
     readonly artifactId: string;
     readonly releaseId: string;
@@ -33,18 +48,12 @@ export class ReleaseArtifactStoreService {
     readonly executionId: string;
     readonly preparedByInstanceId: string;
     readonly committedByInstanceId: string;
-    readonly leaseEpoch: number;
+    readonly fencingToken: number;
     readonly idempotencyKey: string;
     readonly candidateDigest: string;
     readonly stagedAtMs: number;
   }): string {
-    const artifactPath = join(
-      this.artifactDir(),
-      "staging",
-      params.releaseId,
-      `attempt-${String(params.attemptNumber)}`,
-      `${params.moduleName}.artifact.json`,
-    );
+    const artifactPath = this.stagedArtifactPath(params);
     mkdirSync(dirname(artifactPath), { recursive: true });
     writeFileSync(
       artifactPath,
@@ -52,6 +61,14 @@ export class ReleaseArtifactStoreService {
       "utf8",
     );
     return artifactPath;
+  }
+
+  moduleManifestPath(releaseId: string, moduleName: string): string {
+    return join(this.artifactDir(), "releases", releaseId, `${moduleName}.manifest.json`);
+  }
+
+  releaseManifestPath(releaseId: string): string {
+    return join(this.artifactDir(), "releases", releaseId, "release-manifest.json");
   }
 
   removeArtifactFile(artifactPath: string): void {
@@ -76,7 +93,7 @@ export class ReleaseArtifactStoreService {
     const promotedAt = new Date(params.promotedAtMs).toISOString();
 
     const promotedModules: PromotedModuleEntry[] = params.artifacts.map((art) => {
-      const moduleManifestPath = join(releaseDir, `${art.moduleName}.manifest.json`);
+      const moduleManifestPath = this.moduleManifestPath(params.releaseId, art.moduleName);
       writeFileSync(
         moduleManifestPath,
         JSON.stringify(
@@ -90,8 +107,7 @@ export class ReleaseArtifactStoreService {
             executionId: art.executionId,
             preparedByInstanceId: art.preparedByInstanceId,
             committedByInstanceId: art.committedByInstanceId,
-            leaseEpoch: art.leaseEpoch,
-            idempotencyKey: art.idempotencyKey,
+                idempotencyKey: art.idempotencyKey,
             candidateDigest: art.candidateDigest,
             status: "PROMOTED",
             promotedAt,
@@ -107,7 +123,6 @@ export class ReleaseArtifactStoreService {
         artifactId: art.artifactId,
         preparedByInstanceId: art.preparedByInstanceId,
         committedByInstanceId: art.committedByInstanceId,
-        leaseEpoch: art.leaseEpoch,
         idempotencyKey: art.idempotencyKey,
         moduleManifestPath,
       };
@@ -118,7 +133,7 @@ export class ReleaseArtifactStoreService {
         params.artifacts.flatMap((r) => [r.preparedByInstanceId, r.committedByInstanceId]),
       ),
     ].sort();
-    const manifestPath = join(releaseDir, "release-manifest.json");
+    const manifestPath = this.releaseManifestPath(params.releaseId);
     writeFileSync(
       manifestPath,
       JSON.stringify(

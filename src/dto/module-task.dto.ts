@@ -1,4 +1,4 @@
-import { Flag, Integer, Text } from "@agboss/core/dto";
+import { Bool, Integer, Text } from "@agboss/core/dto";
 
 export class ModuleTaskDto {
   @Text({ prompt: "Stable logical task identifier across retries and worker takeovers (e.g., task-001)" })
@@ -19,6 +19,6 @@ export class ModuleTaskDto {
   @Text({ prompt: "Build and ABI flags for this module" })
   buildFlags!: string;
 
-  @Flag({ prompt: "Whether the initial worker holding lease epoch 1 should stall during staging" })
+  @Bool({ prompt: "Whether the first worker to stage this module should stall before its write (the zombie drill)" })
   simulateWorkerStall!: boolean;
 }

@@ -1,13 +1,27 @@
-import { Clock, Injectable } from "@agboss/core";
-import {
-  LedgerDatabaseRepository,
-  type LedgerDrizzleExecutor,
-} from "../repositories/ledger-database.repository.js";
+import { ApplicationContext, Clock, Idempotency, IdempotencyRunStatus, Injectable } from "@agboss/core";
+import { hours } from "@agboss/core/units";
+import { LedgerDatabaseRepository } from "../repositories/ledger-database.repository.js";
+import { LedgerEventRepository } from "../repositories/ledger-event.repository.js";
+import { ModulePreparationRepository } from "../repositories/module-preparation.repository.js";
 import { ReleaseArtifactRepository } from "../repositories/release-artifact.repository.js";
-import { ReleaseCandidateRepository } from "../repositories/release-candidate.repository.js";
-import type { LedgerSnapshot } from "../schemas/release-ledger.schema.js";
-import { LeaseFencingService } from "./lease-fencing.service.js";
 import { ReleaseArtifactStoreService } from "./release-artifact-store.service.js";
+
+/** The ledger's effects live as long as a late zombie can still reach them: far above the lease. */
+const EFFECT_TTL = hours(24);
+
+export interface PrepareModuleParams {
+  readonly releaseId: string;
+  readonly attemptNumber: number;
+  readonly logicalTaskId: string;
+  readonly moduleName: string;
+  readonly buildFlags: string;
+  readonly executionId: string;
+}
+
+export interface PreparedModuleOutcome {
+  readonly preparedByInstanceId: string;
+  readonly candidateDigest: string;
+}
 
 export interface StageModuleParams {
   readonly releaseId: string;
@@ -18,8 +32,6 @@ export interface StageModuleParams {
   readonly preparedByInstanceId: string;
   readonly candidateDigest: string;
   readonly executionId: string;
-  readonly capturedInstanceId: string;
-  readonly capturedLeaseEpoch: number;
   readonly idempotencyKey: string;
 }
 
@@ -27,160 +39,154 @@ export interface StagedModuleOutcome {
   readonly artifactId: string;
   readonly artifactPath: string;
   readonly committedByInstanceId: string;
-  readonly leaseEpoch: number;
-  readonly deduplicated: boolean;
+  /** The fencing token the write was committed under (the replacement's, after a takeover). */
+  readonly fencingToken: number;
+  readonly replayed: boolean;
 }
 
-export interface PrepareModuleParams {
-  readonly releaseId: string;
-  readonly version: string;
-  readonly attemptNumber: number;
-  readonly logicalTaskId: string;
-  readonly moduleName: string;
-  readonly buildFlags: string;
-  readonly executionId: string;
-  readonly idempotencyKey: string;
+/** What one effect stores: only receipts, never documents. */
+interface StagedReceipt {
+  readonly artifactId: string;
+  readonly artifactPath: string;
+  readonly committedByInstanceId: string;
+  readonly stagedAtMs: number;
 }
 
+/**
+ * Every write of a module task is a fenced effect (`Idempotency.runOnce`, #500): the ledger's rows
+ * and the effect's stored result commit in one SQLite transaction, checked against the step's lease
+ * — a worker whose lease was taken over is refused before it writes (`ExecutionError.Fenced`), and
+ * a step run again after a crash replays the stored receipt. The ledger keeps no fencing table of
+ * its own. Files are written after the effect from its receipt, the same content for a replay.
+ */
 @Injectable({
   deps: [
     Clock,
+    ApplicationContext,
+    Idempotency,
     LedgerDatabaseRepository,
     ReleaseArtifactRepository,
-    ReleaseCandidateRepository,
-    LeaseFencingService,
+    ModulePreparationRepository,
+    LedgerEventRepository,
     ReleaseArtifactStoreService,
   ],
 })
 export class ReleaseLedgerService {
   constructor(
     private readonly clock: Clock,
+    private readonly applicationContext: ApplicationContext,
+    private readonly idempotency: Idempotency,
     private readonly ledgerDatabase: LedgerDatabaseRepository,
     private readonly artifactRepository: ReleaseArtifactRepository,
-    private readonly candidateRepository: ReleaseCandidateRepository,
-    private readonly fencing: LeaseFencingService,
+    private readonly preparationRepository: ModulePreparationRepository,
+    private readonly eventRepository: LedgerEventRepository,
     private readonly artifacts: ReleaseArtifactStoreService,
   ) {}
 
-  async recordModulePreparation(params: PrepareModuleParams): Promise<{
-    readonly preparedByInstanceId: string;
-    readonly preparedUnderLeaseEpoch: number;
-    readonly candidateDigest: string;
-  }> {
-    const captured = await this.fencing.captureStepLease(params);
-    const now = this.clock.now().getTime();
-    const candidateDigest = `sha256:${params.releaseId}:a${String(params.attemptNumber)}:${params.moduleName}:${params.buildFlags.replace(/\s+/gu, "_")}`;
-
-    await this.fencing.appendEvent({
-      releaseId: params.releaseId, attemptNumber: params.attemptNumber,
-      logicalTaskId: params.logicalTaskId, moduleName: params.moduleName,
-      executionId: params.executionId, instanceId: captured.instanceId,
-      leaseEpoch: captured.leaseEpoch, idempotencyKey: params.idempotencyKey,
-      operation: "PREPARE_MODULE", outcome: "APPLIED",
-      details: { buildFlags: params.buildFlags, candidateDigest }, now,
-    });
-    return {
-      preparedByInstanceId: captured.instanceId,
-      preparedUnderLeaseEpoch: captured.leaseEpoch,
-      candidateDigest,
-    };
-  }
-
-  async stageModuleArtifact(params: StageModuleParams): Promise<StagedModuleOutcome> {
-    const now = this.clock.now().getTime();
-    const outcome = await this.ledgerDatabase.inTransaction(async (tx) => {
-      const fencedError = await this.fencing.checkAndAdvanceFence({ ...params, now }, tx);
-      if (fencedError !== undefined) {
-        return { fencedError, result: undefined };
-      }
-
-      const existing = await this.artifactRepository.findByIdempotencyKey(params.idempotencyKey, tx);
-      if (existing !== undefined && existing.status !== "COMPENSATED") {
-        return {
-          fencedError: undefined,
-          result: {
-            artifactId: existing.artifactId, artifactPath: existing.artifactPath,
-            committedByInstanceId: existing.committedByInstanceId,
-            leaseEpoch: existing.leaseEpoch, deduplicated: true,
-          },
-        };
-      }
-
-      if (params.capturedLeaseEpoch > 1) {
-        await this.fencing.appendEvent(
+  async recordModulePreparation(params: PrepareModuleParams): Promise<PreparedModuleOutcome> {
+    const { result } = await this.idempotency.runOnce({
+      name: "prepare-module",
+      ttl: EFFECT_TTL,
+      execute: async (): Promise<PreparedModuleOutcome> => {
+        const tx = this.ledgerDatabase.effectDb();
+        const now = this.clock.now().getTime();
+        const preparedByInstanceId = this.applicationContext.instanceId;
+        const candidateDigest = `sha256:${params.releaseId}:a${String(params.attemptNumber)}:${params.moduleName}:${params.buildFlags.replace(/\s+/gu, "_")}`;
+        await this.preparationRepository.insertIfAbsent(
           {
-            releaseId: params.releaseId, attemptNumber: params.attemptNumber,
-            logicalTaskId: params.logicalTaskId, moduleName: params.moduleName,
-            executionId: params.executionId, instanceId: params.capturedInstanceId,
-            leaseEpoch: params.capturedLeaseEpoch, idempotencyKey: params.idempotencyKey,
-            operation: "LEASE_TAKEOVER_COMPLETED", outcome: "APPLIED",
-            details: { preparedByInstanceId: params.preparedByInstanceId, takenOverByInstanceId: params.capturedInstanceId },
-            now,
+            executionId: params.executionId,
+            releaseId: params.releaseId,
+            attemptNumber: params.attemptNumber,
+            logicalTaskId: params.logicalTaskId,
+            moduleName: params.moduleName,
+            preparedByInstanceId,
+            candidateDigest,
+            createdAt: now,
           },
           tx,
         );
-      }
-      return { fencedError: undefined, result: await this.insertStagedArtifact(params, now, tx) };
+        await this.eventRepository.insert(
+          {
+            releaseId: params.releaseId,
+            attemptNumber: params.attemptNumber,
+            executionId: params.executionId,
+            instanceId: preparedByInstanceId,
+            fencingToken: null,
+            operation: "PREPARE_MODULE",
+            outcome: "APPLIED",
+            details: JSON.stringify({ moduleName: params.moduleName, buildFlags: params.buildFlags, candidateDigest }),
+            recordedAt: now,
+          },
+          tx,
+        );
+        return { preparedByInstanceId, candidateDigest };
+      },
     });
-
-    if (outcome.fencedError !== undefined) {
-      throw outcome.fencedError;
-    }
-    return outcome.result;
+    return result;
   }
 
-  async inspectFailedAttempt(releaseId: string, attemptNumber: number): Promise<{
-    readonly compensatedCount: number;
-    readonly activeRemainingCount: number;
-    readonly allCompensated: boolean;
-    readonly ledgerDiagnostic: string;
-  }> {
-    const compensatedCount = await this.artifactRepository.countByAttemptAndStatuses({ releaseId, attemptNumber, statuses: ["COMPENSATED"] });
-    const activeRemainingCount = await this.artifactRepository.countByAttemptAndStatuses({ releaseId, attemptNumber, statuses: ["STAGED", "PROMOTED"] });
-    const diag = await this.candidateRepository.findFailureDiagnostic(releaseId, attemptNumber);
+  async stageModuleArtifact(params: StageModuleParams): Promise<StagedModuleOutcome> {
+    const outcome = await this.idempotency.runOnce({
+      name: "stage-module-artifact",
+      ttl: EFFECT_TTL,
+      execute: async (): Promise<StagedReceipt> => {
+        const tx = this.ledgerDatabase.effectDb();
+        const now = this.clock.now().getTime();
+        const committedByInstanceId = this.applicationContext.instanceId;
+        const artifactId = `art:${params.releaseId}:a${String(params.attemptNumber)}:${params.moduleName}`;
+        const artifactPath = this.artifacts.stagedArtifactPath(params);
+        await this.artifactRepository.insert(
+          {
+            artifactId,
+            releaseId: params.releaseId,
+            version: params.version,
+            attemptNumber: params.attemptNumber,
+            logicalTaskId: params.logicalTaskId,
+            moduleName: params.moduleName,
+            executionId: params.executionId,
+            preparedByInstanceId: params.preparedByInstanceId,
+            committedByInstanceId,
+            idempotencyKey: params.idempotencyKey,
+            status: "STAGED",
+            artifactPath,
+            candidateDigest: params.candidateDigest,
+            compensatedByKey: null,
+            createdAt: now,
+            updatedAt: now,
+          },
+          tx,
+        );
+        await this.eventRepository.insert(
+          {
+            releaseId: params.releaseId,
+            attemptNumber: params.attemptNumber,
+            executionId: params.executionId,
+            instanceId: committedByInstanceId,
+            fencingToken: null,
+            operation: "STAGE_ARTIFACT",
+            outcome: "APPLIED",
+            details: JSON.stringify({ artifactId, artifactPath, preparedByInstanceId: params.preparedByInstanceId }),
+            recordedAt: now,
+          },
+          tx,
+        );
+        return { artifactId, artifactPath, committedByInstanceId, stagedAtMs: now };
+      },
+    });
+    const receipt = outcome.result;
+    this.artifacts.writeStagedArtifact({
+      ...params,
+      artifactId: receipt.artifactId,
+      committedByInstanceId: receipt.committedByInstanceId,
+      fencingToken: outcome.token,
+      stagedAtMs: receipt.stagedAtMs,
+    });
     return {
-      compensatedCount, activeRemainingCount,
-      allCompensated: compensatedCount > 0 && activeRemainingCount === 0,
-      ledgerDiagnostic: diag ?? "ABI symbol mismatch in payment-engine; append --abi-compat=v2 to buildFlags on retry",
+      artifactId: receipt.artifactId,
+      artifactPath: receipt.artifactPath,
+      committedByInstanceId: receipt.committedByInstanceId,
+      fencingToken: outcome.token,
+      replayed: outcome.status !== IdempotencyRunStatus.Ran,
     };
-  }
-
-  getSnapshot(releaseId?: string): Promise<LedgerSnapshot> {
-    return ReleaseArtifactRepository.readSnapshotFromFile({
-      sqlitePath: this.ledgerDatabase.path,
-      artifactDir: this.artifacts.artifactDir(),
-      ...(releaseId === undefined ? {} : { releaseId }),
-    });
-  }
-
-  private async insertStagedArtifact(params: StageModuleParams, now: number, tx: LedgerDrizzleExecutor): Promise<StagedModuleOutcome> {
-    const artifactId = `art:${params.releaseId}:a${String(params.attemptNumber)}:${params.moduleName}`;
-    const artifactPath = this.artifacts.writeStagedArtifact({
-      artifactId, releaseId: params.releaseId, version: params.version, attemptNumber: params.attemptNumber,
-      logicalTaskId: params.logicalTaskId, moduleName: params.moduleName, executionId: params.executionId,
-      preparedByInstanceId: params.preparedByInstanceId, committedByInstanceId: params.capturedInstanceId,
-      leaseEpoch: params.capturedLeaseEpoch, idempotencyKey: params.idempotencyKey,
-      candidateDigest: params.candidateDigest, stagedAtMs: now,
-    });
-    await this.artifactRepository.insert(
-      {
-        artifactId, releaseId: params.releaseId, version: params.version, attemptNumber: params.attemptNumber,
-        logicalTaskId: params.logicalTaskId, moduleName: params.moduleName, executionId: params.executionId,
-        preparedByInstanceId: params.preparedByInstanceId, committedByInstanceId: params.capturedInstanceId,
-        leaseEpoch: params.capturedLeaseEpoch, idempotencyKey: params.idempotencyKey, status: "STAGED",
-        artifactPath, candidateDigest: params.candidateDigest, compensatedByKey: null, createdAt: now, updatedAt: now,
-      },
-      tx,
-    );
-    await this.fencing.appendEvent(
-      {
-        releaseId: params.releaseId, attemptNumber: params.attemptNumber, logicalTaskId: params.logicalTaskId,
-        moduleName: params.moduleName, executionId: params.executionId, instanceId: params.capturedInstanceId,
-        leaseEpoch: params.capturedLeaseEpoch, idempotencyKey: params.idempotencyKey, operation: "STAGE_ARTIFACT",
-        outcome: "APPLIED", details: { artifactId, artifactPath, leaseEpoch: params.capturedLeaseEpoch }, now,
-      },
-      tx,
-    );
-    return { artifactId, artifactPath, committedByInstanceId: params.capturedInstanceId, leaseEpoch: params.capturedLeaseEpoch, deduplicated: false };
   }
 }

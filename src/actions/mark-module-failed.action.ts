@@ -26,7 +26,7 @@ export class MarkModuleFailedAction
   execute(
     input: InputOf<MarkModuleFailedAction>,
   ): Promise<OutputOf<MarkModuleFailedAction>> {
-    const task = input.moduleTask.value;
+    const task = input.moduleTask;
     return Promise.resolve({
       logicalTaskId: task.logicalTaskId,
       releaseId: task.releaseId,

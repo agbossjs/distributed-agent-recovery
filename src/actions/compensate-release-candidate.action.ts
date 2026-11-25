@@ -27,8 +27,8 @@ export class CompensateReleaseCandidateAction
   ) {}
 
   async execute(input: InputOf<CompensateReleaseCandidateAction>): Promise<void> {
-    const req = input.releaseRequest.value;
-    const locked = input.lockedCandidate.value;
+    const req = input.releaseRequest;
+    const locked = input.lockedCandidate;
 
     await this.compensation.compensateReleaseCandidate({
       releaseId: req.releaseId,

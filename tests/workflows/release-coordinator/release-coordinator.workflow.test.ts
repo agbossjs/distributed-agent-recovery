@@ -1,57 +1,54 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { ExecutionStatus } from "@agboss/core";
-import { callTool, replyWith, testWith } from "@agboss/core/testing";
-import { describe, expect, it } from "vitest";
-import { runReleaseRecoveryPipeline } from "../../../scenarios/release-recovery-pipeline.js";
+import { existsSync } from "node:fs";
+import { ApplicationContext, ExecutionStatus } from "@agboss/core";
+import { callTool, replyWith } from "@agboss/core/testing";
+import { describe, expect } from "vitest";
 import { CompensateReleaseCandidateAction } from "../../../src/actions/compensate-release-candidate.action.js";
 import { LockReleaseCandidateAction } from "../../../src/actions/lock-release-candidate.action.js";
 import { ReleaseRecoveryPlannerAgent } from "../../../src/agents/release-recovery-planner/release-recovery-planner.agent.js";
 import {
-  DistributedAgentRecoveryApplication,
+  ReleaseCoordinatorWorkflowFinish,
   ReleaseCoordinatorWorkflowStart,
   ReleaseRecoveryPlannedWorkflowFinish,
 } from "../../../src/distributed-agent-recovery.application.js";
 import { RecoveryPlanDto } from "../../../src/dto/recovery-plan.dto.js";
+import { ReleaseInspectionService } from "../../../src/services/release-inspection.service.js";
 import { ReleaseInvariantVerifierService } from "../../../src/services/release-invariant-verifier.service.js";
-import { ReleaseLedgerService } from "../../../src/services/release-ledger.service.js";
 import { InspectFailedAttemptTool } from "../../../src/tools/inspect-failed-attempt.tool.js";
+import { clusterTest } from "../../support/cluster-files.js";
+import { untilSettled } from "../../support/until-settled.js";
 
-const appTest = testWith(DistributedAgentRecoveryApplication);
+
+const MODULES = "auth-service,payment-engine,telemetry-collector";
 
 describe("ReleaseCoordinatorWorkflow", () => {
-  appTest(
+  // a coordinator and two workers on one SQLite file: the module tasks are queued by the first and claimed by the others
+  clusterTest({ instances: 3 })(
     "executes saga compensation on smoke-gate failure, removes staged files, and replans via ReleaseRecoveryPlannerAgent using InspectFailedAttemptTool",
-    async ({ app, mockLlm }) => {
+    async ({ app, apps, clock, mockLlm }) => {
+      await Promise.all(apps.map((instance) => instance.ready()));
       mockLlm(ReleaseRecoveryPlannerAgent).thenReturn(
-        callTool(InspectFailedAttemptTool, {
-          releaseId: "rel-saga-test",
-          failedAttemptNumber: 1,
-        }),
+        callTool(InspectFailedAttemptTool, { releaseId: "rel-saga-test", failedAttemptNumber: 1 }),
         replyWith(RecoveryPlanDto, {
           releaseId: "rel-saga-test",
           version: "1.9.0",
           nextAttemptNumber: 2,
-          rootCauseAnalysis:
-            "All 3 staged artifacts were compensated; adding --abi-compat=v2",
+          rootCauseAnalysis: "All 3 staged artifacts were compensated; adding --abi-compat=v2",
           correctedBuildFlags: "--opt-level=3 --deterministic --abi-compat=v2",
           enableLeaseTakeoverDrill: true,
         }),
       );
 
-      const execution = await app.execute(
-        ReleaseCoordinatorWorkflowStart,
-        {
+      const execution = await untilSettled(
+        app.execute(ReleaseCoordinatorWorkflowStart, {
           releaseId: "rel-saga-test",
           version: "1.9.0",
           attemptNumber: 1,
-          modules: "auth-service,payment-engine,telemetry-collector",
+          modules: MODULES,
           buildFlags: "--opt-level=3 --deterministic",
           simulateIntegrationFailure: true,
           stallTargetModule: "",
-        },
-        { record: true },
+        }),
+        clock,
       );
 
       expect(execution.status).toBe(ExecutionStatus.Finished);
@@ -59,19 +56,14 @@ describe("ReleaseCoordinatorWorkflow", () => {
         releaseId: "rel-saga-test",
         version: "1.9.0",
         nextAttemptNumber: 2,
-        rootCauseAnalysis:
-          "All 3 staged artifacts were compensated; adding --abi-compat=v2",
+        rootCauseAnalysis: "All 3 staged artifacts were compensated; adding --abi-compat=v2",
         correctedBuildFlags: "--opt-level=3 --deterministic --abi-compat=v2",
         enableLeaseTakeoverDrill: true,
       });
-      expect(execution).toHaveCompensated(LockReleaseCandidateAction, {
-        by: CompensateReleaseCandidateAction,
-      });
+      expect(execution).toHaveCompensated(LockReleaseCandidateAction, { by: CompensateReleaseCandidateAction });
       expect(execution).toHaveCalledTools([InspectFailedAttemptTool]);
 
-      const snap = await app
-        .resolve(ReleaseLedgerService)
-        .getSnapshot("rel-saga-test");
+      const snap = await app.resolve(ReleaseInspectionService).getSnapshot("rel-saga-test");
       expect(snap.artifacts).toHaveLength(3);
       for (const art of snap.artifacts) {
         expect(art.status).toBe("COMPENSATED");
@@ -80,37 +72,76 @@ describe("ReleaseCoordinatorWorkflow", () => {
     },
   );
 
-  it("completes the 12-step 2-attempt distributed release recovery pipeline and verifies all 8 invariants", async () => {
-    const workDir = mkdtempSync(join(tmpdir(), "agboss-full-pipeline-test-"));
-    const sqlitePath = join(workDir, "cluster-state.sqlite");
-    const artifactDir = join(workDir, "artifacts");
+  clusterTest({ instances: 3 })(
+    "recovers in two attempts across the workers: attempt 1 is compensated and replanned, attempt 2 is promoted, and the verifier's invariants hold",
+    async ({ app, apps, clock, mockLlm }) => {
+      await Promise.all(apps.map((instance) => instance.ready()));
+      mockLlm(ReleaseRecoveryPlannerAgent).thenReturn(
+        callTool(InspectFailedAttemptTool, { releaseId: "rel-two-attempts", failedAttemptNumber: 1 }),
+        replyWith(RecoveryPlanDto, {
+          releaseId: "rel-two-attempts",
+          version: "2.4.0",
+          nextAttemptNumber: 2,
+          rootCauseAnalysis: "Compensated; --abi-compat=v2 is missing",
+          correctedBuildFlags: "--opt-level=3 --deterministic --abi-compat=v2",
+          enableLeaseTakeoverDrill: false,
+        }),
+      );
+      const request = {
+        releaseId: "rel-two-attempts",
+        version: "2.4.0",
+        modules: MODULES,
+        stallTargetModule: "",
+      };
 
-    try {
-      const report = await runReleaseRecoveryPipeline({
-        sqlitePath,
-        artifactDir,
-        keepStorageOnExit: true,
-        liveModel: false,
+      const first = await untilSettled(
+        app.execute(ReleaseCoordinatorWorkflowStart, {
+          ...request,
+          attemptNumber: 1,
+          buildFlags: "--opt-level=3 --deterministic",
+          simulateIntegrationFailure: true,
+        }),
+        clock,
+      );
+      expect(first.status).toBe(ExecutionStatus.Finished);
+
+      const second = await untilSettled(
+        app.execute(ReleaseCoordinatorWorkflowStart, {
+          ...request,
+          attemptNumber: 2,
+          buildFlags: "--opt-level=3 --deterministic --abi-compat=v2",
+          simulateIntegrationFailure: false,
+        }),
+        clock,
+      );
+      expect(second).toFinishWith(ReleaseCoordinatorWorkflowFinish, {
+        releaseId: "rel-two-attempts",
+        version: "2.4.0",
+        attemptNumber: 2,
+        status: "PROMOTED",
+        promotedModuleCount: 3,
+        participatingInstances: expect.any(String) as string,
+        manifestPath: expect.any(String) as string,
       });
 
-      expect(report.health.livenessStatus).toBe("healthy");
-      expect(report.health.readinessStatus).toBe("healthy");
-      expect(report.attempt1.status).toBe("finished");
-      expect(report.attempt1.compensationsCount).toBe(1);
-      expect(report.attempt1.toolCallsCount).toBe(1);
-      expect(report.attempt2.status).toBe("finished");
-      expect(report.attempt2.releaseSummary.status).toBe("PROMOTED");
-      expect(report.attempt2.releaseSummary.promotedModuleCount).toBe(3);
+      // the module tasks were stolen by the workers: the coordinator launched them and ran none
+      const snap = await app.resolve(ReleaseInspectionService).getSnapshot("rel-two-attempts");
+      const workers = snap.artifacts.flatMap((art) => [art.preparedByInstanceId, art.committedByInstanceId]);
+      expect(workers.length).toBeGreaterThan(0);
+      expect(workers).not.toContain(app.resolve(ApplicationContext).instanceId);
 
-      const invariants = await ReleaseInvariantVerifierService.verifyFromFile({
-        sqlitePath,
-        artifactDir,
-        releaseId: "rel-2026.10.0",
-      });
-      expect(invariants.allVerified).toBe(true);
-      expect(invariants.checks).toHaveLength(8);
-    } finally {
-      rmSync(workDir, { recursive: true, force: true });
-    }
-  });
+      // invariants 1-5 of the verifier; the sixth (two workers took part) depends on how the workers
+      // share the tasks — a test's tasks are too quick for the second worker to get one — and the
+      // takeover drill's (7, 8) is the module worker test's
+      const report = ReleaseInvariantVerifierService.verifySnapshot(
+        snap,
+        "rel-two-attempts",
+        ["auth-service", "payment-engine", "telemetry-collector"],
+        false,
+      );
+      expect(report.checks.filter((check) => check.number <= 5).map((check) => check.status)).toEqual(
+        Array.from({ length: 5 }, () => "VERIFIED"),
+      );
+    },
+  );
 });

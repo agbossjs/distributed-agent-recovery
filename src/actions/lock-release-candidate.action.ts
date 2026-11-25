@@ -5,7 +5,6 @@ import {
   type InputOf,
   type OutputOf,
   listOf,
-  oneOf,
 } from "@agboss/core";
 import { LockedReleaseCandidateDto } from "../dto/locked-release-candidate.dto.js";
 import { ModuleFailedDto } from "../dto/module-failed.dto.js";
@@ -20,7 +19,7 @@ import { CompensateReleaseCandidateAction } from "./compensate-release-candidate
     "Locks the staged module artifacts as a transactional release candidate in the shared SQLite ledger, registered with CompensateReleaseCandidateAction for saga rollback.",
   input: {
     releaseRequest: ReleaseRequestDto,
-    moduleOutcomes: listOf(oneOf(StagedModuleArtifactDto, ModuleFailedDto)),
+    moduleOutcomes: listOf(StagedModuleArtifactDto, ModuleFailedDto),
   },
   output: LockedReleaseCandidateDto,
   compensateWith: CompensateReleaseCandidateAction,
@@ -37,10 +36,8 @@ export class LockReleaseCandidateAction
   async execute(
     input: InputOf<LockReleaseCandidateAction>,
   ): Promise<OutputOf<LockReleaseCandidateAction>> {
-    const req = input.releaseRequest.value;
-    const failedModules = input.moduleOutcomes.filter(
-      (item) => "reason" in item.value,
-    );
+    const req = input.releaseRequest;
+    const failedModules = input.moduleOutcomes.filter((item) => "reason" in item);
     if (failedModules.length > 0) {
       throw new Error(
         `Cannot lock release candidate ${req.releaseId}: ${String(failedModules.length)} module(s) failed staging`,
