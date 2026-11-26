@@ -24,9 +24,9 @@ describe("ReleaseCoordinatorWorkflow", () => {
   // a coordinator and two workers on one SQLite file: the module tasks are queued by the first and claimed by the others
   clusterTest({ instances: 3 })(
     "executes saga compensation on smoke-gate failure, removes staged files, and replans via ReleaseRecoveryPlannerAgent using InspectFailedAttemptTool",
-    async ({ app, apps, clock, mockLlm }) => {
+    async ({ app, apps, clock, mockModel }) => {
       await Promise.all(apps.map((instance) => instance.ready()));
-      mockLlm(ReleaseRecoveryPlannerAgent).thenReturn(
+      mockModel(ReleaseRecoveryPlannerAgent).thenReturn(
         callTool(InspectFailedAttemptTool, { releaseId: "rel-saga-test", failedAttemptNumber: 1 }),
         replyWith(RecoveryPlanDto, {
           releaseId: "rel-saga-test",
@@ -74,9 +74,9 @@ describe("ReleaseCoordinatorWorkflow", () => {
 
   clusterTest({ instances: 3 })(
     "recovers in two attempts across the workers: attempt 1 is compensated and replanned, attempt 2 is promoted, and the verifier's invariants hold",
-    async ({ app, apps, clock, mockLlm }) => {
+    async ({ app, apps, clock, mockModel }) => {
       await Promise.all(apps.map((instance) => instance.ready()));
-      mockLlm(ReleaseRecoveryPlannerAgent).thenReturn(
+      mockModel(ReleaseRecoveryPlannerAgent).thenReturn(
         callTool(InspectFailedAttemptTool, { releaseId: "rel-two-attempts", failedAttemptNumber: 1 }),
         replyWith(RecoveryPlanDto, {
           releaseId: "rel-two-attempts",

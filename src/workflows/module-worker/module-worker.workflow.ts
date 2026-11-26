@@ -1,6 +1,6 @@
 import {
   ChildPlacement,
-  StepFailedError,
+  StepError,
   Ttl,
   Workflow,
   onAction,
@@ -23,9 +23,9 @@ import { ModuleWorkerWorkflowStart } from "./module-worker.workflow-start.js";
   flow: [
     onStart(ModuleWorkerWorkflowStart)
       .toAction(PrepareModuleCandidateAction)
-      .onError(StepFailedError, toAction(MarkModuleFailedAction))
+      .onError(StepError, toAction(MarkModuleFailedAction))
       .toAction(StageModuleArtifactAction)
-      .onError(StepFailedError, toAction(MarkModuleFailedAction))
+      .onError(StepError, toAction(MarkModuleFailedAction))
       .toFinish(ModuleWorkerWorkflowFinish),
 
     onAction(MarkModuleFailedAction)
