@@ -52,7 +52,7 @@ For fast offline reproducibility ($0 cost), `npm test` and `npm run demo` use a 
 ```bash
 npm run build
 AGBOSS_LOG_WORKERS=true OPENROUTER_API_KEY="sk-or-..." \
-  node dist/src/demo.js --cluster --live --real-clock
+  node dist/src/scripts/demo.js --cluster --live --real-clock
 ```
 
 Here is what actually happened on the machine (recorded verbatim in [`docs/evidence/live-real-clock-cluster-run.json`](https://github.com/agbossjs/distributed-agent-recovery/blob/main/docs/evidence/live-real-clock-cluster-run.json)):
@@ -102,7 +102,7 @@ OPENROUTER_API_KEY="sk-or-v1-..." npm run demo:live
 
 # Real 30s lease TTL + POSIX SIGSTOP/SIGCONT OS worker freeze:
 npm run build
-node dist/src/demo.js --cluster --real-clock
+node dist/src/scripts/demo.js --cluster --real-clock
 
 # 4-container Docker Compose cluster (auto-cleans containers & volume on exit):
 npm run demo:compose
@@ -207,7 +207,7 @@ Checking only that an application log contains `"ZOMBIE_WRITE_REJECTED"` is not 
 *(Note: reading `@agboss/core@0.1.0`'s internal SQLite tables directly in `ClusterSnapshotRepository` is a verification-only diagnostic technique for proving runtime invariants, not a recommended application integration API.)*
 
 All 8 invariants run automatically on every push in GitHub Actions across **three CI environments**:
-1. **Node 24 Real-Clock POSIX `SIGSTOP`/`SIGCONT` Multi-Process Gate** (`node dist/src/demo.js --cluster --real-clock`).
+1. **Node 24 Real-Clock POSIX `SIGSTOP`/`SIGCONT` Multi-Process Gate** (`node dist/src/scripts/demo.js --cluster --real-clock`).
 2. **4-Container Docker Compose & Hard Worker-Crash (`exit 137`) Gate** (verifying both zombie stall takeover and abrupt container death mid-step).
 3. **Single-Node Kubernetes (`kind`) Gate** (`Deployment/agboss-worker` with `replicas: 2` + `Job/agboss-release-coordinator`).
 

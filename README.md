@@ -67,7 +67,7 @@ sequenceDiagram
 
 ## Verified Live LLM + Real-Clock POSIX `SIGSTOP` Evidence
 
-In addition to deterministic offline tests, [`docs/evidence/live-real-clock-cluster-run.json`](docs/evidence/live-real-clock-cluster-run.json) and [`docs/evidence/live-real-clock-cluster-runtime.log`](docs/evidence/live-real-clock-cluster-runtime.log) capture a full multi-process execution (`node dist/src/demo.js --cluster --live --real-clock`) with untouched 30-second AGBoss lease sweeps, real POSIX `SIGSTOP` / `SIGCONT` worker process freezing, and live OpenRouter inference:
+In addition to deterministic offline tests, [`docs/evidence/live-real-clock-cluster-run.json`](docs/evidence/live-real-clock-cluster-run.json) and [`docs/evidence/live-real-clock-cluster-runtime.log`](docs/evidence/live-real-clock-cluster-runtime.log) capture a full multi-process execution (`node dist/src/scripts/demo.js --cluster --live --real-clock`) with untouched 30-second AGBoss lease sweeps, real POSIX `SIGSTOP` / `SIGCONT` worker process freezing, and live OpenRouter inference:
 
 | Metric | Recorded Value ([`live-real-clock-cluster-run.json`](docs/evidence/live-real-clock-cluster-run.json)) |
 |---|---|
@@ -125,10 +125,10 @@ By default, `npm run demo:cluster` uses `FastClusterClock` (~3s total runtime) f
 
 ```bash
 npm run build
-node dist/src/demo.js --cluster --real-clock
+node dist/src/scripts/demo.js --cluster --real-clock
 
 # Combine multi-process real-clock POSIX SIGSTOP with live OpenRouter inference:
-OPENROUTER_API_KEY="sk-or-v1-..." node dist/src/demo.js --cluster --live --real-clock
+OPENROUTER_API_KEY="sk-or-v1-..." node dist/src/scripts/demo.js --cluster --live --real-clock
 ```
 
 ### 4. Automated Vitest Suite Details
@@ -164,7 +164,7 @@ kind delete cluster --name agboss-kind
 
 Every push and pull request runs three independent verification jobs:
 
-1. **`verify` (Static Check, Vitest & Real-Clock POSIX `SIGSTOP` Multi-Process Gate)**: Runs `agboss check`, `tsc`, `eslint`, `vitest`, fast multi-process cluster mode, **and** `node dist/src/demo.js --cluster --real-clock` (real 30s lease TTL + POSIX `SIGSTOP`/`SIGCONT` freeze), uploading the JSON verification report as a CI artifact.
+1. **`verify` (Static Check, Vitest & Real-Clock POSIX `SIGSTOP` Multi-Process Gate)**: Runs `agboss check`, `tsc`, `eslint`, `vitest`, fast multi-process cluster mode, **and** `node dist/src/scripts/demo.js --cluster --real-clock` (real 30s lease TTL + POSIX `SIGSTOP`/`SIGCONT` freeze), uploading the JSON verification report as a CI artifact.
 2. **`docker-compose` (4-Container Cluster & Hard Worker-Crash `exit 137` Gate)**: Builds and runs `deploy/compose/docker-compose.yml` verifying all 8 invariants, then runs a second chaos pass with `AGBOSS_CRASH_WORKER_ON_STALL=true` where one worker container abruptly terminates (`exit 137`) mid-step and verifies that the surviving worker container recovers the orphaned execution from its Step 1 checkpoint without hanging or corrupting state.
 3. **`kubernetes-kind` (Single-Node Kubernetes Manifest Gate)**: Spins up a real `kind` Kubernetes cluster, deploys [`deploy/kubernetes/local-cluster.yaml`](deploy/kubernetes/local-cluster.yaml) (`Deployment/agboss-worker` with `replicas: 2` + `Job/agboss-release-coordinator`), and verifies all 8 invariants.
 
@@ -210,7 +210,7 @@ distributed-agent-recovery/
 ├── src/
 │   ├── distributed-agent-recovery.application.ts  # @Application root assembly & DI bindings
 │   ├── demo.ts                                    # CLI demo & invariant verification entrypoint
-│   ├── environments/                              # *.environment.ts (App, dev, test)
+│   ├── environments/                              # app.environment.ts (defineEnv: ARTIFACT_DIR)
 │   ├── budgets/                                   # *.budget.ts (@Budget cost guardrails)
 │   ├── dto/                                       # *.dto.ts (one @agboss/core/dto class per file)
 │   ├── errors/                                    # *.error.ts (AGBossError subclasses)

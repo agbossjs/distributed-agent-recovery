@@ -3,7 +3,6 @@ import { hours, seconds } from "@agboss/core/units";
 import { ReleaseAppDailyBudget } from "./budgets/release-app-daily.budget.js";
 import { ReleaseExecutionBudget } from "./budgets/release-execution.budget.js";
 import { ReleaseTenantDailyBudget } from "./budgets/release-tenant-daily.budget.js";
-import { AppEnvironment } from "./environments/app.environment.js";
 import { ReleaseClusterHealthCheck } from "./health-checks/release-cluster.health-check.js";
 import { OpenRouterModelProvider } from "./model-providers/openrouter.model-provider.js";
 import { LeaseEvidenceObserver } from "./observers/lease-evidence.observer.js";
@@ -20,7 +19,6 @@ import { ReleaseRecoveryPlannedWorkflowFinish } from "./workflows/release-coordi
 @Application({
   name: "distributed-agent-recovery-application",
   version: "1.1.0",
-  environment: AppEnvironment,
   storage: ReleaseLedgerDatabaseStorage, // one SQLite file for every instance: leases, queue, checkpoints, the ledger
   modelProvider: OpenRouterModelProvider, // every model of the application: explicit, no default
   workflows: [ReleaseCoordinatorWorkflow, ModuleWorkerWorkflow],

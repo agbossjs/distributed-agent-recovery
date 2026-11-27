@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { ApplicationContext, Injectable } from "@agboss/core";
+import { Injectable, type InferEnv } from "@agboss/core";
+import { appEnv } from "../environments/app.environment.js";
 import type { LedgerArtifactRow } from "../schemas/release-ledger.schema.js";
 
 export interface PromotedModuleEntry {
@@ -13,13 +14,12 @@ export interface PromotedModuleEntry {
   readonly moduleManifestPath: string;
 }
 
-@Injectable({ deps: [ApplicationContext] })
+@Injectable({ deps: [appEnv] })
 export class ReleaseArtifactStoreService {
-  constructor(private readonly applicationContext: ApplicationContext) {}
+  constructor(private readonly environment: InferEnv<typeof appEnv>) {}
 
   artifactDir(): string {
-    const env = this.applicationContext.environment as { readonly artifactDir?: string };
-    return env.artifactDir ?? join(process.cwd(), ".data/dev/artifacts");
+    return this.environment.artifactDir;
   }
 
   /** Where a module's staged artifact of one attempt lives: the same path for every worker that stages it. */

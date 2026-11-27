@@ -13,4 +13,4 @@ COPY tests ./tests
 
 RUN npx agboss check && npm run build
 
-CMD ["node", "dist/src/demo.js"]
+CMD ["node", "dist/src/scripts/demo.js"]

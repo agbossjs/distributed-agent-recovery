@@ -186,6 +186,9 @@ function checkZombieFencingAndTakeover(
   const rec = promoted.find((a) => a.logicalTaskId === stall?.logicalTaskId);
   const replacementToken = evidence?.replacementWrite?.fencingToken ?? null;
   const takeoverToken = evidence?.takeover?.fencingToken ?? null;
+  // the takeover event names whoever took the lease over (a child's own lease is first taken over by the
+  // instance that reclaims it, then claimed by the worker that runs it, at a higher token): the instance
+  // that resumed the task is the one whose fenced write ran under the replacement token
 
   // a zombie that woke is refused at its protected write (layer 1: the fenced effect) or stopped by the
   // lease's own fence before it got there (layer 2: the hand-over); one that died never writes at all
@@ -200,7 +203,8 @@ function checkZombieFencingAndTakeover(
   const inv8Ok = stall !== undefined && rec !== undefined && evidence?.takeover !== undefined &&
     rec.executionId === stall.executionId && rec.preparedByInstanceId === stall.stalledInstanceId &&
     rec.committedByInstanceId !== rec.preparedByInstanceId &&
-    rec.committedByInstanceId === evidence.takeover.instanceId && (replacementToken ?? 0) >= 2;
+    evidence.replacementWrite !== undefined && rec.committedByInstanceId === evidence.replacementWrite.instanceId &&
+    (replacementToken ?? 0) >= 2;
 
   return [
     check(7, "INV-7-ZOMBIE-WORKER-FENCED", "Zombie worker fenced: its lease was taken over at a higher fencing token and its stale write never committed", inv7Ok, {
@@ -219,7 +223,7 @@ function checkZombieFencingAndTakeover(
       preparedBy: rec?.preparedByInstanceId ?? null,
       takenOverBy: rec?.committedByInstanceId ?? null,
       replacementFencingToken: replacementToken,
-      takeoverHolderMatchesCommitter: evidence?.takeover?.instanceId === rec?.committedByInstanceId,
+      replacementWriterMatchesCommitter: evidence?.replacementWrite?.instanceId === rec?.committedByInstanceId,
     }),
   ];
 }

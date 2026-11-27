@@ -9,7 +9,7 @@
   <circle cx="46" cy="23" r="6.5" fill="#ffbd2e"/>
   <circle cx="68" cy="23" r="6.5" fill="#27c93f"/>
   <text x="560" y="28" text-anchor="middle" fill="#8b949e" font-family="Menlo, Monaco, Consolas, monospace" font-size="13">agbossjs/distributed-agent-recovery — Ghost in the Machine: The Zombie AI Worker (45.0s)</text>
-  <text x="28" y="86" fill="#8b949e" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">$ OPENROUTER_API_KEY=sk-or-... node dist/src/demo.js --cluster --live --real-clock</text>
+  <text x="28" y="86" fill="#8b949e" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">$ OPENROUTER_API_KEY=sk-or-... node dist/src/scripts/demo.js --cluster --live --real-clock</text>
 <text x="28" y="108" fill="#79c0ff" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">[coord:2768]  INFO  Started distributed-agent-recovery-application 1.0.0 (real-30s-clock)</text>
 <text x="28" y="130" fill="#56d364" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">[worker:2772] WORKER_READY status=healthy instance=2cfa9c79-b0c0... pid=2772</text>
 <text x="28" y="152" fill="#56d364" font-family="Menlo, Monaco, Consolas, monospace" font-size="13.2" xml:space="preserve">[worker:2783] WORKER_READY status=healthy instance=bfa0c7de-86c6... pid=2783</text>

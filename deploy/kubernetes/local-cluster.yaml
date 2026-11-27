@@ -38,8 +38,6 @@ spec:
               value: "true"
             - name: OPENROUTER_API_KEY
               value: offline-test-openrouter-api-key
-            - name: PII_PSEUDONYM_KEY
-              value: distributed-agent-recovery-pseudonym-key-32b!
           readinessProbe:
             exec:
               command: ["test", "-f", "/tmp/worker-ready"]
@@ -68,7 +66,7 @@ spec:
         - name: coordinator
           image: agboss/distributed-agent-recovery:latest
           imagePullPolicy: IfNotPresent
-          command: ["node", "dist/src/demo.js"]
+          command: ["node", "dist/src/scripts/demo.js"]
           env:
             - name: SQLITE_PATH
               value: /data/cluster-state.sqlite
@@ -82,8 +80,6 @@ spec:
               value: "true"
             - name: OPENROUTER_API_KEY
               value: offline-test-openrouter-api-key
-            - name: PII_PSEUDONYM_KEY
-              value: distributed-agent-recovery-pseudonym-key-32b!
           volumeMounts:
             - name: shared-sqlite-data
               mountPath: /data

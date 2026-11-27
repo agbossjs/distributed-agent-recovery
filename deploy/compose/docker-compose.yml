@@ -21,7 +21,6 @@ services:
       AGBOSS_CRASH_WORKER_ON_STALL: ${AGBOSS_CRASH_WORKER_ON_STALL:-false}
       AGBOSS_LIVE_DEMO: ${AGBOSS_LIVE_DEMO:-false}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-offline-test-openrouter-api-key}
-      PII_PSEUDONYM_KEY: distributed-agent-recovery-pseudonym-key-32b!
     volumes:
       - cluster_data:/data
     depends_on:
@@ -50,7 +49,6 @@ services:
       AGBOSS_CRASH_WORKER_ON_STALL: ${AGBOSS_CRASH_WORKER_ON_STALL:-false}
       AGBOSS_LIVE_DEMO: ${AGBOSS_LIVE_DEMO:-false}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-offline-test-openrouter-api-key}
-      PII_PSEUDONYM_KEY: distributed-agent-recovery-pseudonym-key-32b!
     volumes:
       - cluster_data:/data
     depends_on:
@@ -67,7 +65,7 @@ services:
     build:
       context: ../..
       dockerfile: deploy/compose/Dockerfile
-    command: ["node", "dist/src/demo.js"]
+    command: ["node", "dist/src/scripts/demo.js"]
     environment:
       SQLITE_PATH: /data/cluster-state.sqlite
       ARTIFACT_DIR: /data/artifacts
@@ -78,7 +76,6 @@ services:
       AGBOSS_CRASH_WORKER_ON_STALL: ${AGBOSS_CRASH_WORKER_ON_STALL:-false}
       AGBOSS_LIVE_DEMO: ${AGBOSS_LIVE_DEMO:-false}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-offline-test-openrouter-api-key}
-      PII_PSEUDONYM_KEY: distributed-agent-recovery-pseudonym-key-32b!
     volumes:
       - cluster_data:/data
     depends_on:
